@@ -1,155 +1,115 @@
-# Search AI APK v2 — Review
+# Search AI APK v3 — review notes
 
-A native Android version of the standalone Search AI app, built from the
-v1 code plus Claude's v1 review (Search-AI-v1-CLAUDE-REVIEW.md). Same app,
-same package, same keystore as v1, so it installs over v1 and keeps saved
-words and history. This is a code and build review document for the next
-improvement round, not a user manual.
+Build tier only. This APK has not been installed or tapped through on the
+user's phone, and the network paths (dictionary entry, translation
+fallback, on-device speech) have not been exercised on a device. Phone
+tests below decide whether v3 is confirmed.
 
-## What changed from v1
+## What v3 changes on top of v2
 
-All 13 review bugs, fixed:
-- System Back no longer exits the app from a non-search screen. A back
-  stack returns to the previous screen; Back from a tab goes to Search;
-  Back from Search exits, as before.
-- build.sh can no longer hide compile errors: set -euo pipefail, plus
-  -bootclasspath and -Xlint:-options, so the javac line needs no grep
-  filter. R8 now runs with --release.
-- No stale translation on direction change: there is no direction toggle
-  any more. Direction comes from the query script (Persian range
-  U+0600 to U+06FF), so a history tap can never run a wrong-direction
-  lookup.
-- A misspelling that the service echoes back is treated as no result,
-  never shown as a Persian meaning.
-- HTTP errors now say "Translation service unavailable, try again
-  later" instead of "Needs internet". Connections disconnect and readers
-  close in finally blocks.
-- The scroll position resets to the top on every screen change.
-- Data fixes at the source (words.json) and regenerated: Resilient's
-  doubled word in the Persian example is gone, Illuminate's antonym is
-  "Obscure", Lucky's synonyms and antonyms are capitalized.
-- History and saved entries are case-insensitive, and an exact match
-  stores the canonical word, so "austere" and "Austere" never split.
-- Full configChanges list, so dark-mode toggle, font scale, and
-  multi-window no longer wipe the result and card state.
-- Buttons have ripple press feedback. The keyboard Search action runs
-  the lookup and hides the keyboard.
-- Un-saving a word clears learned. "Use for answers" is disabled while
-  its provider switch is off. Similar words now match when the query
-  contains the word, or within edit distance 2.
+- Web home shape (from the web home screenshot): "Type any word..."
+  heading; Look up pill plus an English ⇄ Persian indicator with an FA
+  label and a speaker control; the select-text tip line; History and
+  Settings pill buttons; Recent searches as chips with a remove button
+  on each chip; a My Words section ("Words you saved or marked learned
+  in Search AI, kept in one archive.") with cards showing the word, its
+  Persian, a Saved or Learned pill, and a CEFR badge ONLY where the
+  level is verified (Favoritism C1, Interpretation B2, Helpful A2,
+  Transcendence C2, Eloquent C1 — every other word shows no badge,
+  never an invented level); Try a word chips (Rebel, Nostalgia,
+  Eloquent, Serendipity, Resilient). All sections use this app's own
+  saved/learned/history store; nothing is copied from the web
+  screenshot as data, and no sync is claimed.
+- Full entries for words outside the bundled 35: when online, the app
+  fetches a full dictionary entry from a keyless source
+  (dictionaryapi.dev, no key, no account) and renders it in the same
+  full card shape as a bundled word — definitions, examples, synonyms,
+  opposites, FA tap-to-reveal throughout, instant Save. The fetched
+  entry is persisted locally (dict::<word> in the same "searchai"
+  store), so a repeat lookup shows the full card even offline, and
+  Save files the full entry, not just the word. The dictionary fetch
+  and the translation fetch run in parallel: the entry wins when it
+  arrives; the translation is only the fallback, and when the entry
+  wins the translation is still cached under the entry's word so the
+  My Words card can show its Persian.
+- Never invents content: if the dictionary source gives no entry, the
+  app falls back to the translation plus a plain note ("Full entry
+  not available."). If the source gives only a translation, that is
+  all that is shown, plus the note. No definition, example, or synonym
+  is ever fabricated.
+- Speaker control: on-device text-to-speech (no key, no network call).
+  Persian input is spoken with a Persian voice, English otherwise.
+- Definitions and examples on bundled and fetched cards are
+  selectable, so the select-text tip works on card content too.
+- All v2 behavior preserved: back stack with syncButtons (Save/Learned
+  in sync without re-rendering, FA reveal surviving Back),
+  script-based direction detection, echo treated as no result,
+  "service unavailable" error text with disconnect/close in finally,
+  scroll reset on screen change, case-insensitive history/saved with
+  canonical storage, full configChanges list, ripple feedback,
+  keyboard Search action, org.json parser with typed result, MyMemory
+  fallback, translation cache, in-memory sets, tests, verify.sh.
+- No sign-in, no OAuth, no cloud code of any kind in v3. Gmail login
+  plus cloud storage of saved/searched words is a separate follow-up
+  after v3 and was deliberately left out.
+- No live AI answers section (the web AI section needs a key the APK
+  does not collect; the APK stays key-free by the user's rule, with no
+  key prompts, banners, or credential fields anywhere).
+- No pictures unless a word has one: bundled words have no pictures
+  in the APK, and the dictionary source provides none, so fetched
+  cards are text-only like v2's Show card.
+- Credit by SobhaN (app header and Settings footer). Zero banned
+  strings (the two forbidden brand names) in source, manifest, or dex
+  (verify.sh's own grep pattern is the only match, as in v2).
 
-Navigation stack (review Q1): Save and Learned stay in sync through view
-tags and a sync method, so going Back never re-renders the result and
-never collapses revealed FA text. The card Back button uses the same
-system Back path.
+## What v3 does NOT do yet
 
-Robust translation (review Q2): the parser moved into its own class
-(GtxParser) using org.json, skipping null segments, returning a typed
-result (OK, EMPTY, OFFLINE, HTTP_ERROR). gtx stays first; MyMemory
-(keyless) is the fallback. Successful translations cache under tc::
-keys, capped near 200 entries, so re-lookups work offline. Queries cap
-near 500 characters before sending.
+- No web-data sync: the APK shows its own saved words and history,
+  not the web app's. Saved/learned words stay on the phone only.
+- No live AI answers (key-free by the user's rule; see above).
+- No pictures in cards (no picture source in the APK; bundled words
+  have none, the dictionary source provides none).
+- No another-meaning swap, no extra examples/overview/background/
+  etymology sections for bundled words (only the main definition and
+  example, as in v2), no per-item history remove beyond the home
+  chips, no SQLite migration (in-memory sets already fix the
+  repeated-parsing hot path), no long-list recycling, no Play Store
+  route.
+- MyMemory's anonymous rate limit is unverified; if it rate-limits,
+  the app reports "service unavailable" rather than a wrong result.
+- The dictionary source covers common English words; rare, misspelled,
+  or multi-word entries may 404, in which case the app shows the
+  translation plus the "Full entry not available." note.
+- The web home's speaker icon is a speaker button here; the web
+  "select any text" popup itself is not reproduced (card text is
+  selectable, and the tip line describes the behavior).
+- The web My Words cards show a CEFR badge for every card; this app
+  shows one only for the five verified words above.
 
-Offline Persian to English (review Q5): a reverse index built at
-generation time from definitionFa only (91 normalized keys for 35
-words). A Persian query that matches shows the full word card, so Save
-works. Shared keys show a disambiguation list. A miss falls through to
-the network and caches under the fa direction.
+## Verification (build tier)
 
-Storage (review Q3, partial): saved, learned, and history now live in
-in-memory sets loaded once and written through, so rendering no longer
-re-parses the stored strings several times. SQLite is NOT in v2 (see
-"Left for v3").
+- apksigner verify passed; certificate SHA-256 matches v2, so v3
+  installs over v2 and keeps saved words and history.
+- aapt2 dump badging: package com.sobhan.searchai, versionCode 3,
+  versionName 3.0, sdkVersion 24, targetSdkVersion 34, INTERNET only,
+  label "Search AI".
+- Dex banned-string scan: 0. Source/manifest scan: 0 (excluding
+  verify.sh's own grep pattern).
+- JUnit: 20 tests pass (15 carried from v2, 5 new: dictionary parse,
+  dictionary reject-empty, dictionary JSON round-trip, phonetic
+  fallback, verified-CEFR-only).
+- v1, v2, and the SAT Vocab Builder APK are untouched.
 
-Tests (review Q4): the Android-free logic moved into plain classes
-(GtxParser, WordIndex, ListCodec) with 15 JUnit 4 tests: parser fixtures
-(single and multi-segment, escaped quotes, null segments, empty input,
-HTML error body, truncated JSON, echo), lookup (exact, similar, script
-detection, normalization, reverse index), list round-trip, and data
-integrity (35 words, no case-insensitive duplicates, no empty fields,
-Persian fields in Arabic script, no adjacent duplicate tokens,
-synonyms/antonyms capitalized, reverse index sorted and in range).
-All 15 pass. A verify.sh build gate checks signature plus certificate
-match to v1, badging, banned strings, and resources.arsc Stored.
+## Phone tests owed
 
-The word generator (gen-searchai-words.py) is committed in this source
-so the build is reproducible: fix words.json, run the generator, build.
-
-## Screens
-
-Search, result, Show card, Saved Words, History, Settings. One activity,
-programmatic layout, no pictures in v2. The direction toggle is gone;
-direction is detected from the query. Settings still holds all provider
-cards and collects no credential.
-
-## Verification evidence (build tier only, not phone-tested)
-
-- File: Search-AI-v2.apk, 37,273 bytes, package com.sobhan.searchai,
-  versionCode 2, versionName 2.0.
-- apksigner verify: exit 0, 1 signer, CN=SobhaN. Certificate SHA-256
-  matches v1, so v2 installs over v1 and keeps its data.
-- aapt2 dump badging: package com.sobhan.searchai, sdkVersion 24,
-  targetSdkVersion 34, INTERNET permission only, label Search AI,
-  launchable activity com.sobhan.searchai.MainActivity.
-- Dex scan: 0 matches for the banned strings, case-insensitive.
-- resources.arsc is Stored, as targetSdk 30+ requires.
-- JUnit: 15 tests, all pass.
-- Separation: Search-AI-v1.apk is untouched, and the vocab APK
-  (com.sobhan.vocabbuilder, 8,468,043 bytes) is untouched.
-- Build warnings: 1 non-fatal javac note (onBackPressed is a deprecated
-  API on newer targets; the override still works at this target).
-  No build errors.
-
-## What v2 does NOT do yet
-
-- No live AI answers. The Settings provider choice is stored for a later
-  version; v2 never calls an AI API and never asks for a credential.
-- No pictures in the Show card. The card is text only.
-- Only the main definition and main example are shown. Extra examples,
-  overview, background, and etymology are not bundled yet.
-- No another-meaning swap. Words with several meanings show only the
-  main one.
-- History has Clear only, no per-item remove.
-- Saved words and history live only on the phone in this app's own
-  store. They do not sync with the web app.
-- The machine translation still uses unofficial no-credential endpoints
-  (gtx first, MyMemory fallback). MyMemory's anonymous rate limit was
-  not verified; if it rate-limits, the app reports "service unavailable"
-  rather than a wrong result.
-- No Play Store publishing route. This is a standalone native app.
-
-## Left for v3, with reasons
-
-- SQLite migration (review Q3 second half). The in-memory sets already
-  fix the repeated-parsing hot path, and a SQLite import touches every
-  read and write path plus a one-time migration. That needs its own
-  phone test, so it stays out of v2 rather than risking saved data.
-- The review's "austerity" example does not hold: the edit distance
-  from "austere" to "austerity" is 3, not 2, and neither string contains
-  the other, so "austerity" still finds nothing in v2. The threshold
-  stays at 2 exactly as specified; raising it would add false matches
-  and needs its own decision.
-- Long-list recycling (ListView) for saved/history. The lists are small
-  at this scale; the in-memory sets plus the existing layout are enough
-  for v2.
-
-## Build notes
-
-- Working files: searchai2-src (MainActivity.java, WordsData.java,
-  GtxParser.java, WordIndex.java, ListCodec.java),
-  AndroidManifest-searchai2.xml, res-searchai (via searchai2-src/res),
-  build-searchai2.sh, verify-searchai2.sh, all under the android-app
-  directory. Per-version backup: searchai2-backup-src.
-- WordsData.java is generated from words.json by gen-searchai-words.py;
-  the generator is part of the pushed source because the pushed source
-  already contains the generated file.
-- Signing: the working build script reads the keystore password at build
-  time from the existing local vocab build script and never writes it
-  into a new file. The repository copy of the build script (build.sh in
-  the staged source directory) differs deliberately: it takes the
-  password from an environment variable and uses repository-relative
-  paths, so it runs without any local file the repo does not contain.
-- The staged source directory contains source, manifest, resources, the
-  repository build script, the verify gate, the generator, the tests,
-  and this review. It contains no keystore, no password, and no APK
-  binary.
+Install over v2 and check saved words and history survive; home looks
+like the web home (heading, lookup row, tip, pills, recent chips with
+remove, My Words cards, Try a word); tap a recent chip's remove button
+and confirm it disappears; search "outlaw" online and confirm the full
+card (definitions, examples, synonyms) with FA reveal and instant
+Save; reopen the app offline and search "outlaw" again for the full
+card; Save it, then open it from Saved Words for the full entry;
+search a word the dictionary source lacks and confirm translation plus
+the "Full entry not available." note, never a fake entry; tap the
+speaker and confirm speech; Back from card/saved/history/settings;
+FA reveal surviving Back; rotate plus dark-mode toggle.

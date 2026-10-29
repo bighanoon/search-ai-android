@@ -8,8 +8,8 @@ import java.util.Set;
 import org.junit.Test;
 import static org.junit.Assert.*;
 
-/** JVM tests for the Android-free logic (GtxParser, WordIndex, ListCodec)
-    and for the generated word data. Run with JUnit 4 from test-libs. */
+/** JVM tests for the Android-free logic (GtxParser, WordIndex, ListCodec,
+    DictParser) and for the generated word data. Run with JUnit 4. */
 public class SearchAiTest {
 
   // ---- GtxParser ----
@@ -221,5 +221,86 @@ public class SearchAiTest {
       assertTrue("not capitalized: " + p,
           p.length() > 0 && Character.isUpperCase(p.charAt(0)));
     }
+  }
+
+  // ---- DictParser (v3) ----
+
+  // Fixture in dictionaryapi.dev shape; test data only, never app content.
+  private static final String OUTLAW_JSON =
+      "[{\"word\":\"outlaw\",\"phonetic\":\"ˈaʊtlɔː\",\"meanings\":["
+      + "{\"partOfSpeech\":\"noun\",\"definitions\":["
+      + "{\"definition\":\"A person who has broken the law and is wanted.\","
+      + "\"example\":\"The outlaw hid in the hills.\","
+      + "\"synonyms\":[\"fugitive\"],\"antonyms\":[]}],"
+      + "\"synonyms\":[\"criminal\"],\"antonyms\":[\"citizen\"]}]}]";
+
+  @Test
+  public void dictParseFullEntry() {
+    DictParser.DictEntry e = DictParser.parse(OUTLAW_JSON);
+    assertNotNull(e);
+    assertEquals("outlaw", e.word);
+    assertEquals("ˈaʊtlɔː", e.phonetic);
+    assertEquals("noun", e.pos);
+    assertEquals(1, e.defs.size());
+    assertEquals("A person who has broken the law and is wanted.",
+        e.defs.get(0).definition);
+    assertEquals("The outlaw hid in the hills.", e.defs.get(0).example);
+    assertTrue(e.synonyms.contains("criminal"));
+    assertTrue(e.synonyms.contains("fugitive"));
+    assertTrue(e.antonyms.contains("citizen"));
+  }
+
+  @Test
+  public void dictParseRejectsEmpty() {
+    assertNull(DictParser.parse(null));
+    assertNull(DictParser.parse("[]"));
+    assertNull(DictParser.parse("not json"));
+    assertNull(DictParser.parse("[{\"word\":\"x\",\"meanings\":[]}]"));
+    assertNull(DictParser.parse(
+        "[{\"word\":\"x\",\"meanings\":[{\"partOfSpeech\":\"noun\","
+        + "\"definitions\":[{\"definition\":\"\"}]}]}]"));
+  }
+
+  @Test
+  public void dictJsonRoundTrip() {
+    DictParser.DictEntry e = DictParser.parse(OUTLAW_JSON);
+    assertNotNull(e);
+    DictParser.DictEntry back = DictParser.fromJson(DictParser.toJson(e));
+    assertNotNull(back);
+    assertEquals(e.word, back.word);
+    assertEquals(e.phonetic, back.phonetic);
+    assertEquals(e.pos, back.pos);
+    assertEquals(e.defs.size(), back.defs.size());
+    assertEquals(e.defs.get(0).definition, back.defs.get(0).definition);
+    assertEquals(e.defs.get(0).example, back.defs.get(0).example);
+    assertEquals(e.synonyms, back.synonyms);
+    assertEquals(e.antonyms, back.antonyms);
+    assertNull(DictParser.fromJson("garbage"));
+    assertNull(DictParser.fromJson(null));
+  }
+
+  @Test
+  public void dictPhoneticFallback() {
+    DictParser.DictEntry e = DictParser.parse(
+        "[{\"word\":\"test\",\"phonetics\":[{\"text\":\"tɛst\"}],"
+        + "\"meanings\":[{\"partOfSpeech\":\"noun\",\"definitions\":"
+        + "[{\"definition\":\"A trial.\"}]}]}]");
+    assertNotNull(e);
+    assertEquals("tɛst", e.phonetic);
+  }
+
+  // ---- cefrFor (v3): only verified levels, nothing invented ----
+
+  @Test
+  public void cefrOnlyVerified() {
+    assertEquals("C1", WordIndex.cefrFor("Favoritism"));
+    assertEquals("C1", WordIndex.cefrFor("favoritism"));
+    assertEquals("B2", WordIndex.cefrFor("Interpretation"));
+    assertEquals("A2", WordIndex.cefrFor("Helpful"));
+    assertEquals("C2", WordIndex.cefrFor("Transcendence"));
+    assertEquals("C1", WordIndex.cefrFor("Eloquent"));
+    assertNull(WordIndex.cefrFor("Austere"));
+    assertNull(WordIndex.cefrFor("Outlaw"));
+    assertNull(WordIndex.cefrFor(null));
   }
 }
