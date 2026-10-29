@@ -2,6 +2,7 @@ package com.sobhan.searchai;
 
 import android.app.Activity;
 import android.content.Context;
+import android.speech.tts.TextToSpeech;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.graphics.Typeface;
@@ -33,6 +34,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 
 public class MainActivity extends Activity {
   private static final int BG = 0xFF121216;
@@ -45,6 +47,10 @@ public class MainActivity extends Activity {
   private static final String[] PROVIDERS = {"Gemini", "ChatGPT", "Perplexity", "Claude", "Grok"};
   private static final int TC_CACHE_CAP = 200;
   private static final int QUERY_CAP = 500;
+  // v3 web-home constants: muted heading, recent cap, Try-a-word chips.
+  private static final int HEADING = 0xFF9C8E8E;
+  private static final int RECENT_HOME_CAP = 10;
+  private static final String[] TRY_WORDS = {"Rebel", "Nostalgia", "Eloquent", "Serendipity", "Resilient"};
 
   private SharedPreferences prefs;
   private ScrollView scrollView;
@@ -54,7 +60,9 @@ public class MainActivity extends Activity {
   private LinearLayout settingsScreen;
   private LinearLayout cardScreen;
   private LinearLayout resultBox;
-  private LinearLayout recentBox;
+  private LinearLayout recentChipsBox;
+  private LinearLayout myWordsBox;
+  private LinearLayout tryBox;
   private LinearLayout savedList;
   private TextView savedCount;
   private LinearLayout historyList;
@@ -71,9 +79,16 @@ public class MainActivity extends Activity {
   private LinkedHashSet<String> learnedSet = new LinkedHashSet<String>();
   private List<String> historyData = new ArrayList<String>();
   private int lookupId = 0;
+  // v3: on-device speech for the speaker control (no key, no network call).
+  private TextToSpeech tts;
+  private String pendingSpeak;
 
   private interface TranslationCallback {
     void onResult(GtxParser.Result result);
+  }
+
+  private interface DictCallback {
+    void onResult(DictParser.DictEntry entry);
   }
 
   @Override
@@ -271,7 +286,7 @@ public class MainActivity extends Activity {
     if (name.equals("saved")) refreshSaved();
     if (name.equals("history")) refreshHistory();
     if (name.equals("settings")) refreshSettings();
-    if (name.equals("search")) refreshRecent();
+    if (name.equals("search")) refreshHome();
   }
 
   private void navigate(String name) {
@@ -327,6 +342,13 @@ public class MainActivity extends Activity {
     cardBox.removeAllViews();
     cardBox.addView(backButton());
     renderFaTranslationInto(cardBox, query, translation, true);
+    navigate("card");
+  }
+
+  private void showDictCard(DictParser.DictEntry e) {
+    cardBox.removeAllViews();
+    cardBox.addView(backButton());
+    renderDictInto(cardBox, e, true);
     navigate("card");
   }
 
@@ -454,13 +476,63 @@ public class MainActivity extends Activity {
 
   // ---- Screens ----
 
-  private void refreshRecent() {
-    recentBox.removeAllViews();
-    if (historyData.size() == 0) return;
-    recentBox.addView(label("RECENT"));
-    int count = historyData.size() < 5 ? historyData.size() : 5;
-    for (int i = 0; i < count; i++) {
-      final String item = historyData.get(i);
+  // ---- Web home (v3): recent chips with remove, My Words cards,
+  // Try-a-word chips — all from this app's own store, never the web's. ----
+
+  private void refreshHome() {
+    recentChipsBox.removeAllViews();
+    if (historyData.size() > 0) {
+      recentChipsBox.addView(label("Recent searches"));
+      int count = historyData.size() < RECENT_HOME_CAP
+          ? historyData.size() : RECENT_HOME_CAP;
+      for (int i = 0; i < count; i++) {
+        final String item = historyData.get(i);
+        recentChipsBox.addView(chipRow(item, new View.OnClickListener() {
+          public void onClick(View v) {
+            input.setText(item);
+            doLookup(item);
+          }
+        }, new View.OnClickListener() {
+          public void onClick(View v) {
+            for (int j = historyData.size() - 1; j >= 0; j--) {
+              if (historyData.get(j).equalsIgnoreCase(item)) {
+                historyData.remove(j);
+              }
+            }
+            persistHistory();
+            refreshHome();
+          }
+        }));
+      }
+    }
+    myWordsBox.removeAllViews();
+    myWordsBox.addView(label("My Words"));
+    myWordsBox.addView(tv(
+        "Words you saved or marked learned in Search AI, kept in one archive.",
+        14, SUB, false));
+    List<String> mine = new ArrayList<String>();
+    for (String s : savedSet) mine.add(s);
+    for (String l : learnedSet) {
+      boolean dup = false;
+      for (String m : mine) {
+        if (m.equalsIgnoreCase(l)) {
+          dup = true;
+          break;
+        }
+      }
+      if (!dup) mine.add(l);
+    }
+    if (mine.size() == 0) {
+      myWordsBox.addView(tv("No words saved yet.", 15, SUB, false));
+    } else {
+      for (int i = 0; i < mine.size(); i++) {
+        myWordsBox.addView(myWordCard(mine.get(i)));
+      }
+    }
+    tryBox.removeAllViews();
+    tryBox.addView(label("Try a word"));
+    for (int i = 0; i < TRY_WORDS.length; i++) {
+      final String item = TRY_WORDS[i];
       Button b = btn(item, CARD2);
       b.setOnClickListener(new View.OnClickListener() {
         public void onClick(View v) {
@@ -468,15 +540,91 @@ public class MainActivity extends Activity {
           doLookup(item);
         }
       });
-      recentBox.addView(b);
+      tryBox.addView(b);
     }
+  }
+
+  private LinearLayout chipRow(String item, View.OnClickListener onTap,
+      View.OnClickListener onRemove) {
+    LinearLayout row = new LinearLayout(this);
+    row.setOrientation(LinearLayout.HORIZONTAL);
+    row.setGravity(Gravity.CENTER_VERTICAL);
+    Button chip = btn(item, CARD2);
+    chip.setOnClickListener(onTap);
+    row.addView(chip, new LinearLayout.LayoutParams(0,
+        LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+    Button x = btn("×", CARD2);
+    x.setOnClickListener(onRemove);
+    LinearLayout.LayoutParams xp = new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.WRAP_CONTENT,
+        LinearLayout.LayoutParams.WRAP_CONTENT);
+    xp.setMargins(dp(8), 0, 0, 0);
+    row.addView(x, xp);
+    return row;
+  }
+
+  /** This app's own Persian for a word, for the My Words card line. */
+  private String persianFor(String item) {
+    WordsData.Word w = WordIndex.findExact(item);
+    if (w != null && w.definitionFa != null && w.definitionFa.length() > 0) {
+      return w.definitionFa;
+    }
+    DictParser.DictEntry e = getCachedDict(item);
+    if (e != null) {
+      String t = getCachedTranslation(e.word, "auto", "fa");
+      if (t != null) return t;
+    }
+    String t = prefs.getString("trans::" + item, null);
+    if (t != null) return t;
+    return prefs.getString("transfa::" + item, null);
+  }
+
+  private LinearLayout myWordCard(final String item) {
+    LinearLayout c = card();
+    c.setBackground(ripple(CARD));
+    c.addView(tv(item, 17, TEXT, true));
+    String fa = persianFor(item);
+    if (fa != null) {
+      TextView faView = tv(fa, 15, SUB, false);
+      faView.setTextDirection(View.TEXT_DIRECTION_RTL);
+      c.addView(faView);
+    }
+    LinearLayout row = new LinearLayout(this);
+    row.setOrientation(LinearLayout.HORIZONTAL);
+    row.setPadding(0, dp(8), 0, 0);
+    TextView p = tv(isLearned(item) ? "Learned" : "Saved", 13, TEXT, true);
+    p.setBackground(rounded(isLearned(item) ? GREEN : ACCENT, 12));
+    p.setPadding(dp(12), dp(4), dp(12), dp(4));
+    row.addView(p);
+    // CEFR badge only where verified; otherwise no badge at all.
+    String level = WordIndex.cefrFor(item);
+    if (level != null) {
+      TextView lv = tv(level, 13, TEXT, true);
+      lv.setBackground(rounded(CARD2, 12));
+      lv.setPadding(dp(12), dp(4), dp(12), dp(4));
+      LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+          LinearLayout.LayoutParams.WRAP_CONTENT,
+          LinearLayout.LayoutParams.WRAP_CONTENT);
+      lp.setMargins(dp(8), 0, 0, 0);
+      lv.setLayoutParams(lp);
+      row.addView(lv);
+    }
+    c.addView(row);
+    c.setOnClickListener(new View.OnClickListener() {
+      public void onClick(View v) {
+        openSavedWord(item);
+      }
+    });
+    return c;
   }
 
   private LinearLayout buildSearchScreen() {
     LinearLayout screen = new LinearLayout(this);
     screen.setOrientation(LinearLayout.VERTICAL);
+    // Web-home heading, muted and large.
+    screen.addView(tv("Type any word...", 28, HEADING, true));
     input = new EditText(this);
-    input.setHint("Type a word");
+    input.setHint("Type a word...");
     input.setHintTextColor(SUB);
     input.setTextColor(TEXT);
     input.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
@@ -499,11 +647,16 @@ public class MainActivity extends Activity {
     });
     input.setBackground(rounded(CARD, 10));
     input.setPadding(dp(14), dp(12), dp(14), dp(12));
-    screen.addView(input, new LinearLayout.LayoutParams(
-        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+    LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.MATCH_PARENT,
+        LinearLayout.LayoutParams.WRAP_CONTENT);
+    ip.setMargins(0, dp(16), 0, 0);
+    screen.addView(input, ip);
 
+    // Look up row: pill plus direction indicator, FA label, speaker.
     LinearLayout row = new LinearLayout(this);
     row.setOrientation(LinearLayout.HORIZONTAL);
+    row.setGravity(Gravity.CENTER_VERTICAL);
     row.setPadding(0, dp(12), 0, 0);
     Button lookupBtn = btn("Look up", ACCENT);
     lookupBtn.setOnClickListener(new View.OnClickListener() {
@@ -511,18 +664,82 @@ public class MainActivity extends Activity {
         doLookup(input.getText().toString());
       }
     });
-    row.addView(lookupBtn, new LinearLayout.LayoutParams(
-        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+    row.addView(lookupBtn, new LinearLayout.LayoutParams(0,
+        LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+    TextView dir = tv("English ⇄ Persian", 14, SUB, false);
+    LinearLayout.LayoutParams dirParams = new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.WRAP_CONTENT,
+        LinearLayout.LayoutParams.WRAP_CONTENT);
+    dirParams.setMargins(dp(12), 0, 0, 0);
+    row.addView(dir, dirParams);
+    TextView fa = tv("FA", 13, TEXT, true);
+    fa.setBackground(rounded(CARD2, 12));
+    fa.setPadding(dp(12), dp(4), dp(12), dp(4));
+    LinearLayout.LayoutParams faParams = new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.WRAP_CONTENT,
+        LinearLayout.LayoutParams.WRAP_CONTENT);
+    faParams.setMargins(dp(8), 0, 0, 0);
+    row.addView(fa, faParams);
+    Button hear = btn("🔊", CARD2);
+    hear.setOnClickListener(new View.OnClickListener() {
+      public void onClick(View v) {
+        speakWord(input.getText().toString().trim());
+      }
+    });
+    LinearLayout.LayoutParams hearParams = new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.WRAP_CONTENT,
+        LinearLayout.LayoutParams.WRAP_CONTENT);
+    hearParams.setMargins(dp(8), 0, 0, 0);
+    row.addView(hear, hearParams);
     screen.addView(row);
 
-    recentBox = new LinearLayout(this);
-    recentBox.setOrientation(LinearLayout.VERTICAL);
-    screen.addView(recentBox);
+    // Select-text tip line, as on the web home.
+    TextView tip = tv(
+        "Tip: select any text on this page — press and hold a word and its translation appears instantly.",
+        13, SUB, false);
+    LinearLayout.LayoutParams tipParams = new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.MATCH_PARENT,
+        LinearLayout.LayoutParams.WRAP_CONTENT);
+    tipParams.setMargins(0, dp(12), 0, 0);
+    screen.addView(tip, tipParams);
+
+    // History and Settings pills, same actions as the bottom nav.
+    LinearLayout pills = new LinearLayout(this);
+    pills.setOrientation(LinearLayout.HORIZONTAL);
+    pills.setPadding(0, dp(12), 0, 0);
+    Button histBtn = btn("History", CARD2);
+    histBtn.setOnClickListener(new View.OnClickListener() {
+      public void onClick(View v) {
+        navTab("history");
+      }
+    });
+    pills.addView(histBtn, new LinearLayout.LayoutParams(0,
+        LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+    Button setBtn = btn("Settings", CARD2);
+    setBtn.setOnClickListener(new View.OnClickListener() {
+      public void onClick(View v) {
+        navTab("settings");
+      }
+    });
+    LinearLayout.LayoutParams setParams = new LinearLayout.LayoutParams(0,
+        LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+    setParams.setMargins(dp(12), 0, 0, 0);
+    pills.addView(setBtn, setParams);
+    screen.addView(pills);
 
     resultBox = new LinearLayout(this);
     resultBox.setOrientation(LinearLayout.VERTICAL);
     resultBox.setPadding(0, dp(8), 0, 0);
     screen.addView(resultBox);
+    recentChipsBox = new LinearLayout(this);
+    recentChipsBox.setOrientation(LinearLayout.VERTICAL);
+    screen.addView(recentChipsBox);
+    myWordsBox = new LinearLayout(this);
+    myWordsBox.setOrientation(LinearLayout.VERTICAL);
+    screen.addView(myWordsBox);
+    tryBox = new LinearLayout(this);
+    tryBox.setOrientation(LinearLayout.VERTICAL);
+    screen.addView(tryBox);
     return screen;
   }
 
@@ -551,7 +768,7 @@ public class MainActivity extends Activity {
         historyData.clear();
         persistHistory();
         refreshHistory();
-        refreshRecent();
+        refreshHome();
       }
     });
     screen.addView(clearBtn);
@@ -583,6 +800,11 @@ public class MainActivity extends Activity {
     WordsData.Word w = WordIndex.findExact(item);
     if (w != null) {
       showCard(w);
+      return;
+    }
+    DictParser.DictEntry e = getCachedDict(item);
+    if (e != null) {
+      showDictCard(e);
       return;
     }
     String trans = prefs.getString("trans::" + item, "");
@@ -663,7 +885,7 @@ public class MainActivity extends Activity {
       settingsBox.addView(card);
     }
     settingsBox.addView(tv("Search AI by SobhaN", 14, SUB, false));
-    settingsBox.addView(tv("Version 2", 14, SUB, false));
+    settingsBox.addView(tv("Version 3", 14, SUB, false));
     settingsBox.addView(tv("Saved words and history stay on this phone.", 14, SUB, false));
   }
 
@@ -684,14 +906,14 @@ public class MainActivity extends Activity {
       if (hits.size() == 1) {
         WordsData.Word w = hits.get(0);
         addToHistory(w.word);
-        refreshRecent();
+        refreshHome();
         resultBox.removeAllViews();
         renderWordInto(resultBox, w, false);
         return;
       }
       if (hits.size() > 1) {
         addToHistory(q);
-        refreshRecent();
+        refreshHome();
         resultBox.removeAllViews();
         resultBox.addView(label("DID YOU MEAN?"));
         for (int i = 0; i < hits.size(); i++) {
@@ -710,13 +932,13 @@ public class MainActivity extends Activity {
       String cached = getCachedTranslation(q, "fa", "en");
       if (cached != null) {
         addToHistory(q);
-        refreshRecent();
+        refreshHome();
         resultBox.removeAllViews();
         renderFaTranslationInto(resultBox, q, cached, false);
         return;
       }
       addToHistory(q);
-      refreshRecent();
+      refreshHome();
       resultBox.removeAllViews();
       final TextView waiting = tv("Translating…", 15, SUB, false);
       resultBox.addView(waiting);
@@ -736,25 +958,34 @@ public class MainActivity extends Activity {
         }
       });
     } else {
-      // English input: exact match, then cache, then similar + network.
+      // English input: exact match, then saved full entry, then cached
+      // translation, then similar words plus network (full entry first).
       WordsData.Word w = WordIndex.findExact(q);
       if (w != null) {
         addToHistory(w.word);
-        refreshRecent();
+        refreshHome();
         resultBox.removeAllViews();
         renderWordInto(resultBox, w, false);
+        return;
+      }
+      DictParser.DictEntry cachedDict = getCachedDict(q);
+      if (cachedDict != null) {
+        addToHistory(cachedDict.word);
+        refreshHome();
+        resultBox.removeAllViews();
+        renderDictInto(resultBox, cachedDict, false);
         return;
       }
       String cached = getCachedTranslation(q, "auto", "fa");
       if (cached != null) {
         addToHistory(q);
-        refreshRecent();
+        refreshHome();
         resultBox.removeAllViews();
         renderTranslationInto(resultBox, q, cached, false);
         return;
       }
       addToHistory(q);
-      refreshRecent();
+      refreshHome();
       resultBox.removeAllViews();
       resultBox.addView(tv("No offline entry for \"" + q + "\".", 15, SUB, false));
       List<WordsData.Word> sims = WordIndex.findSimilar(q, 8);
@@ -772,21 +1003,50 @@ public class MainActivity extends Activity {
           resultBox.addView(b);
         }
       }
-      final TextView waiting = tv("Translating…", 15, SUB, false);
+      final TextView waiting = tv("Loading full entry…", 15, SUB, false);
       resultBox.addView(waiting);
       final String fq = q;
+      // Full entry and translation run in parallel: the entry wins when
+      // it arrives, so a repeat lookup never waits on it twice; the
+      // translation is only the fallback, and when the entry wins the
+      // translation is still cached under the entry's word for My Words.
+      final boolean[] dictDone = new boolean[]{false};
+      final boolean[] dictWon = new boolean[]{false};
+      final DictParser.DictEntry[] wonEntry = new DictParser.DictEntry[]{null};
+      final GtxParser.Result[] storedTrans = new GtxParser.Result[]{null};
+      fetchDict(q, new DictCallback() {
+        public void onResult(DictParser.DictEntry entry) {
+          if (myId != lookupId) return;
+          dictDone[0] = true;
+          if (entry != null) {
+            dictWon[0] = true;
+            wonEntry[0] = entry;
+            putCachedDict(entry);
+            resultBox.removeView(waiting);
+            renderDictInto(resultBox, entry, false);
+          } else if (storedTrans[0] != null) {
+            resultBox.removeView(waiting);
+            renderTranslationResult(storedTrans[0], fq);
+          } else {
+            waiting.setText("Translating…");
+          }
+        }
+      });
       fetchTranslation(q, "auto", "fa", new TranslationCallback() {
         public void onResult(GtxParser.Result r) {
           if (myId != lookupId) return;
-          resultBox.removeView(waiting);
-          if (r.status == GtxParser.OK) {
-            putCachedTranslation(fq, "auto", "fa", r.translation);
-            renderTranslationInto(resultBox, fq, r.translation, false);
-          } else if (r.status == GtxParser.HTTP_ERROR) {
-            resultBox.addView(tv("Translation service unavailable, try again later.", 15, SUB, false));
-          } else {
-            resultBox.addView(tv("Needs internet for this word.", 15, SUB, false));
+          if (dictWon[0]) {
+            if (r.status == GtxParser.OK && wonEntry[0] != null) {
+              putCachedTranslation(wonEntry[0].word, "auto", "fa", r.translation);
+            }
+            return;
           }
+          if (!dictDone[0]) {
+            storedTrans[0] = r;
+            return;
+          }
+          resultBox.removeView(waiting);
+          renderTranslationResult(r, fq);
         }
       });
     }
@@ -819,7 +1079,7 @@ public class MainActivity extends Activity {
       conn = (HttpURLConnection) url.openConnection();
       conn.setConnectTimeout(8000);
       conn.setReadTimeout(8000);
-      conn.setRequestProperty("User-Agent", "SearchAI/2.0");
+      conn.setRequestProperty("User-Agent", "SearchAI/3.0");
       int code = conn.getResponseCode();
       if (code != 200) {
         return new GtxParser.Result(GtxParser.HTTP_ERROR, null);
@@ -874,6 +1134,81 @@ public class MainActivity extends Activity {
     }
   }
 
+  // ---- Dictionary full entries (v3): keyless source, cached locally
+  // so a fetched word behaves like a bundled word afterward. ----
+
+  private String dictKey(String word) {
+    return "dict::" + word.toLowerCase(Locale.US);
+  }
+
+  private DictParser.DictEntry getCachedDict(String query) {
+    if (query == null) return null;
+    String json = prefs.getString(dictKey(query.trim()), null);
+    if (json == null) return null;
+    return DictParser.fromJson(json);
+  }
+
+  private void putCachedDict(DictParser.DictEntry e) {
+    String json = DictParser.toJson(e);
+    if (json == null) return;
+    prefs.edit().putString(dictKey(e.word), json).apply();
+  }
+
+  private void fetchDict(final String q, final DictCallback cb) {
+    new Thread(new Runnable() {
+      public void run() {
+        final DictParser.DictEntry e = fetchDictSync(q);
+        runOnUiThread(new Runnable() {
+          public void run() {
+            cb.onResult(e);
+          }
+        });
+      }
+    }).start();
+  }
+
+  private DictParser.DictEntry fetchDictSync(String q) {
+    String query = q;
+    if (query.length() > QUERY_CAP) query = query.substring(0, QUERY_CAP);
+    HttpURLConnection conn = null;
+    BufferedReader reader = null;
+    try {
+      String enc = URLEncoder.encode(query, "UTF-8");
+      URL url = new URL("https://api.dictionaryapi.dev/api/v2/entries/en/" + enc);
+      conn = (HttpURLConnection) url.openConnection();
+      conn.setConnectTimeout(8000);
+      conn.setReadTimeout(8000);
+      conn.setRequestProperty("User-Agent", "SearchAI/3.0");
+      int code = conn.getResponseCode();
+      if (code != 200) return null;
+      reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), "UTF-8"));
+      StringBuilder sb = new StringBuilder();
+      String line;
+      while ((line = reader.readLine()) != null) sb.append(line);
+      return DictParser.parse(sb.toString());
+    } catch (Exception e) {
+      return null;
+    } finally {
+      try {
+        if (reader != null) reader.close();
+      } catch (Exception ignored) {
+      }
+      if (conn != null) conn.disconnect();
+    }
+  }
+
+  private void renderTranslationResult(GtxParser.Result r, String fq) {
+    if (r.status == GtxParser.OK) {
+      putCachedTranslation(fq, "auto", "fa", r.translation);
+      renderTranslationInto(resultBox, fq, r.translation, false,
+          "Full entry not available.");
+    } else if (r.status == GtxParser.HTTP_ERROR) {
+      resultBox.addView(tv("Translation service unavailable, try again later.", 15, SUB, false));
+    } else {
+      resultBox.addView(tv("Needs internet for this word.", 15, SUB, false));
+    }
+  }
+
   // ---- Card rendering: Save/Learned sync by tag, never by re-render. ----
 
   private void renderWordInto(LinearLayout parent, final WordsData.Word w, boolean isCard) {
@@ -883,7 +1218,9 @@ public class MainActivity extends Activity {
     if (w.phonetic != null && w.phonetic.length() > 0) posLine = posLine + " · " + w.phonetic;
     card.addView(tv(posLine, 14, SUB, false));
     card.addView(label("MEANING"));
-    card.addView(tv(w.definition, 16, TEXT, false));
+    TextView def = tv(w.definition, 16, TEXT, false);
+    def.setTextIsSelectable(true);
+    card.addView(def);
     if (w.definitionFa != null && w.definitionFa.length() > 0) {
       card.addView(faRow(w.definitionFa));
     }
@@ -894,6 +1231,7 @@ public class MainActivity extends Activity {
     inset.setPadding(dp(12), dp(12), dp(12), dp(12));
     TextView ex = tv(w.example, 15, TEXT, false);
     ex.setTypeface(null, Typeface.ITALIC);
+    ex.setTextIsSelectable(true);
     inset.addView(ex);
     card.addView(inset);
     if (w.exampleFa != null && w.exampleFa.length() > 0) {
@@ -950,11 +1288,17 @@ public class MainActivity extends Activity {
 
   private void renderTranslationInto(LinearLayout parent, final String query,
       final String translation, boolean isCard) {
+    renderTranslationInto(parent, query, translation, isCard,
+        "Full entry not in offline set.");
+  }
+
+  private void renderTranslationInto(LinearLayout parent, final String query,
+      final String translation, boolean isCard, String note) {
     LinearLayout card = card();
     card.addView(tv(query, 20, TEXT, true));
     card.addView(label("PERSIAN MEANING"));
     card.addView(faRow(translation));
-    card.addView(tv("Full entry not in offline set.", 14, SUB, false));
+    card.addView(tv(note, 14, SUB, false));
     LinearLayout row = new LinearLayout(this);
     row.setOrientation(LinearLayout.HORIZONTAL);
     row.setPadding(0, dp(12), 0, 0);
@@ -986,6 +1330,143 @@ public class MainActivity extends Activity {
       row.addView(showBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
     }
     card.addView(row);
+    parent.addView(card);
+  }
+
+  private String joinWords(List<String> words) {
+    StringBuilder sb = new StringBuilder();
+    for (int i = 0; i < words.size(); i++) {
+      if (i > 0) sb.append(" · ");
+      sb.append(words.get(i));
+    }
+    return sb.toString();
+  }
+
+  // FA tap-to-reveal for fetched text: cached translation first, then
+  // the same keyless translation path, never an invented translation.
+  private LinearLayout lazyFaRow(final String englishText) {
+    LinearLayout row = new LinearLayout(this);
+    row.setOrientation(LinearLayout.VERTICAL);
+    row.setGravity(Gravity.CENTER_HORIZONTAL);
+    row.setPadding(0, dp(6), 0, dp(6));
+    final TextView faView = new TextView(this);
+    faView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+    faView.setTextColor(TEXT);
+    faView.setTextDirection(View.TEXT_DIRECTION_RTL);
+    faView.setVisibility(View.GONE);
+    final Button faBtn = btn("FA", CARD2);
+    faBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+    faBtn.setPadding(dp(18), dp(6), dp(18), dp(6));
+    faBtn.setOnClickListener(new View.OnClickListener() {
+      public void onClick(View v) {
+        if (faView.getVisibility() == View.VISIBLE) {
+          faView.setVisibility(View.GONE);
+          return;
+        }
+        String cached = getCachedTranslation(englishText, "auto", "fa");
+        if (cached != null) {
+          faView.setText(cached);
+          faView.setVisibility(View.VISIBLE);
+          return;
+        }
+        faBtn.setText("…");
+        fetchTranslation(englishText, "auto", "fa", new TranslationCallback() {
+          public void onResult(GtxParser.Result r) {
+            if (r.status == GtxParser.OK) {
+              putCachedTranslation(englishText, "auto", "fa", r.translation);
+              faView.setText(r.translation);
+              faView.setVisibility(View.VISIBLE);
+            }
+            faBtn.setText("FA");
+          }
+        });
+      }
+    });
+    row.addView(faBtn);
+    row.addView(faView);
+    return row;
+  }
+
+  // Same full card shape as a bundled word: definitions, examples,
+  // synonyms, opposites, FA tap-to-reveal throughout, instant Save.
+  // The entry itself is already cached, so Save files the full entry.
+  private void renderDictInto(LinearLayout parent, final DictParser.DictEntry e,
+      boolean isCard) {
+    LinearLayout card = card();
+    card.addView(tv(e.word, 22, TEXT, true));
+    String posLine = e.pos;
+    if (e.phonetic != null && e.phonetic.length() > 0) {
+      posLine = posLine.length() > 0 ? posLine + " · " + e.phonetic : e.phonetic;
+    }
+    if (posLine.length() > 0) card.addView(tv(posLine, 14, SUB, false));
+    for (int i = 0; i < e.defs.size(); i++) {
+      DictParser.Def d = e.defs.get(i);
+      card.addView(label(i == 0 ? "MEANING" : "MEANING " + (i + 1)));
+      TextView def = tv(d.definition, 16, TEXT, false);
+      def.setTextIsSelectable(true);
+      card.addView(def);
+      card.addView(lazyFaRow(d.definition));
+      if (d.example != null && d.example.length() > 0) {
+        card.addView(label("EXAMPLE"));
+        LinearLayout inset = new LinearLayout(this);
+        inset.setOrientation(LinearLayout.VERTICAL);
+        inset.setBackground(rounded(CARD2, 12));
+        inset.setPadding(dp(12), dp(12), dp(12), dp(12));
+        TextView ex = tv(d.example, 15, TEXT, false);
+        ex.setTypeface(null, Typeface.ITALIC);
+        ex.setTextIsSelectable(true);
+        inset.addView(ex);
+        card.addView(inset);
+        card.addView(lazyFaRow(d.example));
+      }
+    }
+    if (e.synonyms.size() > 0) {
+      card.addView(tv("Close words: " + joinWords(e.synonyms), 14, SUB, false));
+    }
+    if (e.antonyms.size() > 0) {
+      card.addView(tv("Opposite words: " + joinWords(e.antonyms), 14, SUB, false));
+    }
+    LinearLayout row = new LinearLayout(this);
+    row.setOrientation(LinearLayout.HORIZONTAL);
+    row.setPadding(0, dp(12), 0, 0);
+    final Button saveBtn = btn(isSaved(e.word) ? "Saved" : "Save",
+        isSaved(e.word) ? GREEN : ACCENT);
+    saveBtn.setTag("save:" + e.word);
+    saveBtn.setOnClickListener(new View.OnClickListener() {
+      public void onClick(View v) {
+        boolean nowSaved = !isSaved(e.word);
+        setSaved(e.word, nowSaved);
+        syncButtons(e.word);
+      }
+    });
+    row.addView(saveBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+    if (!isCard) {
+      View spacer = new View(this);
+      spacer.setLayoutParams(new LinearLayout.LayoutParams(dp(8), LinearLayout.LayoutParams.WRAP_CONTENT));
+      row.addView(spacer);
+      Button showBtn = btn("Show card", CARD2);
+      showBtn.setOnClickListener(new View.OnClickListener() {
+        public void onClick(View v) {
+          showDictCard(e);
+        }
+      });
+      row.addView(showBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+    }
+    card.addView(row);
+    final Button learnBtn = btn(isLearned(e.word) ? "Learned" : "Mark learned",
+        isLearned(e.word) ? GREEN : CARD2);
+    learnBtn.setTag("learn:" + e.word);
+    learnBtn.setOnClickListener(new View.OnClickListener() {
+      public void onClick(View v) {
+        boolean nowLearned = !isLearned(e.word);
+        setLearned(e.word, nowLearned);
+        syncButtons(e.word);
+      }
+    });
+    LinearLayout.LayoutParams learnParams = new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+    learnParams.setMargins(0, dp(8), 0, 0);
+    card.addView(learnBtn, learnParams);
     parent.addView(card);
   }
 
@@ -1027,5 +1508,40 @@ public class MainActivity extends Activity {
     }
     card.addView(row);
     parent.addView(card);
+  }
+
+  // Speaker control: on-device speech, no key, no network call.
+  // Persian input is spoken with a Persian voice, English otherwise.
+  private void speakWord(String text) {
+    if (text == null || text.length() == 0) return;
+    if (tts == null) {
+      pendingSpeak = text;
+      tts = new TextToSpeech(this, new TextToSpeech.OnInitListener() {
+        public void onInit(int status) {
+          if (status == TextToSpeech.SUCCESS && pendingSpeak != null) {
+            speakNow(pendingSpeak);
+            pendingSpeak = null;
+          }
+        }
+      });
+      return;
+    }
+    speakNow(text);
+  }
+
+  private void speakNow(String text) {
+    Locale loc = WordIndex.isPersian(text)
+        ? new Locale("fa", "IR") : Locale.US;
+    tts.setLanguage(loc);
+    tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "searchai-speak");
+  }
+
+  @Override
+  protected void onDestroy() {
+    if (tts != null) {
+      tts.shutdown();
+      tts = null;
+    }
+    super.onDestroy();
   }
 }
