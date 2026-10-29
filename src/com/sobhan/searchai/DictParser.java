@@ -15,15 +15,23 @@ import org.json.JSONObject;
     Never invents content: parse() returns null unless the response
     carries at least one non-empty definition. Anything the source
     does not provide (a section, a synonym, an example) is simply
-    absent from the entry, and the UI says so instead of filling it. */
+    absent from the entry, and the UI says so instead of filling it.
+
+    v4: the source returns one JSON entry per spelling variant (for
+    example "rebel" arrives as a noun entry plus a verb entry). v3
+    read only the first entry, which dropped the verb meaning and
+    its synonyms ("defy") and antonyms ("obey", "submit"). v4 merges
+    every entry, and each definition keeps its own part of speech. */
 public class DictParser {
 
   public static class Def {
     public String definition;
     public String example;
-    public Def(String definition, String example) {
+    public String pos;
+    public Def(String definition, String example, String pos) {
       this.definition = definition;
       this.example = example;
+      this.pos = pos;
     }
   }
 
@@ -62,45 +70,51 @@ public class DictParser {
     }
   }
 
+  private static String entryPhonetic(JSONObject entry) {
+    String phonetic = entry.optString("phonetic", "").trim();
+    if (phonetic.length() > 0) return phonetic;
+    JSONArray phonetics = entry.optJSONArray("phonetics");
+    if (phonetics != null) {
+      for (int i = 0; i < phonetics.length(); i++) {
+        JSONObject p = phonetics.optJSONObject(i);
+        if (p == null) continue;
+        String t = p.optString("text", "").trim();
+        if (t.length() > 0) return t;
+      }
+    }
+    return "";
+  }
+
   /** Parse one dictionary response into a full entry, or null. */
   public static DictEntry parse(String resp) {
     if (resp == null) return null;
     try {
       JSONArray root = new JSONArray(resp);
       if (root.length() == 0) return null;
-      JSONObject first = root.optJSONObject(0);
-      if (first == null) return null;
-      String word = first.optString("word", "").trim();
-      if (word.length() == 0) return null;
-      String phonetic = first.optString("phonetic", "").trim();
-      if (phonetic.length() == 0) {
-        JSONArray phonetics = first.optJSONArray("phonetics");
-        if (phonetics != null) {
-          for (int i = 0; i < phonetics.length(); i++) {
-            JSONObject p = phonetics.optJSONObject(i);
-            if (p == null) continue;
-            String t = p.optString("text", "").trim();
-            if (t.length() > 0) {
-              phonetic = t;
-              break;
-            }
-          }
-        }
-      }
+      String word = "";
+      String phonetic = "";
       String pos = "";
       List<Def> defs = new ArrayList<Def>();
       List<String> synonyms = new ArrayList<String>();
       List<String> antonyms = new ArrayList<String>();
       LinkedHashSet<String> seenSyn = new LinkedHashSet<String>();
       LinkedHashSet<String> seenAnt = new LinkedHashSet<String>();
-      JSONArray meanings = first.optJSONArray("meanings");
-      if (meanings != null) {
+      for (int e = 0; e < root.length(); e++) {
+        JSONObject entry = root.optJSONObject(e);
+        if (entry == null) continue;
+        if (word.length() == 0) {
+          word = entry.optString("word", "").trim();
+        }
+        if (phonetic.length() == 0) {
+          phonetic = entryPhonetic(entry);
+        }
+        JSONArray meanings = entry.optJSONArray("meanings");
+        if (meanings == null) continue;
         for (int m = 0; m < meanings.length(); m++) {
           JSONObject meaning = meanings.optJSONObject(m);
           if (meaning == null) continue;
-          if (pos.length() == 0) {
-            pos = meaning.optString("partOfSpeech", "").trim();
-          }
+          String meaningPos = meaning.optString("partOfSpeech", "").trim();
+          if (pos.length() == 0) pos = meaningPos;
           addWords(synonyms, seenSyn, meaning.optJSONArray("synonyms"));
           addWords(antonyms, seenAnt, meaning.optJSONArray("antonyms"));
           JSONArray ds = meaning.optJSONArray("definitions");
@@ -111,13 +125,13 @@ public class DictParser {
             String defText = defObj.optString("definition", "").trim();
             if (defText.length() == 0) continue;
             String ex = defObj.optString("example", "").trim();
-            defs.add(new Def(defText, ex));
+            defs.add(new Def(defText, ex, meaningPos));
             addWords(synonyms, seenSyn, defObj.optJSONArray("synonyms"));
             addWords(antonyms, seenAnt, defObj.optJSONArray("antonyms"));
           }
         }
       }
-      if (defs.isEmpty()) return null;
+      if (word.length() == 0 || defs.isEmpty()) return null;
       return new DictEntry(word, phonetic, pos, defs, synonyms, antonyms);
     } catch (JSONException e) {
       return null;
@@ -136,6 +150,7 @@ public class DictParser {
         JSONObject d = new JSONObject();
         d.put("d", e.defs.get(i).definition);
         d.put("e", e.defs.get(i).example);
+        d.put("p", e.defs.get(i).pos);
         ds.put(d);
       }
       o.put("defs", ds);
@@ -158,6 +173,7 @@ public class DictParser {
       JSONObject o = new JSONObject(json);
       String word = o.optString("word", "").trim();
       if (word.length() == 0) return null;
+      String entryPos = o.optString("pos", "");
       List<Def> defs = new ArrayList<Def>();
       JSONArray ds = o.optJSONArray("defs");
       if (ds != null) {
@@ -166,7 +182,10 @@ public class DictParser {
           if (d == null) continue;
           String defText = d.optString("d", "").trim();
           if (defText.length() == 0) continue;
-          defs.add(new Def(defText, d.optString("e", "")));
+          // Entries cached before v4 carry no per-definition pos;
+          // they fall back to the entry pos, never to an invented one.
+          String defPos = d.optString("p", entryPos);
+          defs.add(new Def(defText, d.optString("e", ""), defPos));
         }
       }
       if (defs.isEmpty()) return null;
@@ -187,7 +206,7 @@ public class DictParser {
         }
       }
       return new DictEntry(word, o.optString("phonetic", ""),
-          o.optString("pos", ""), defs, synonyms, antonyms);
+          entryPos, defs, synonyms, antonyms);
     } catch (JSONException e) {
       return null;
     }

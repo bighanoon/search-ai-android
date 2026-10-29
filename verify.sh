@@ -1,22 +1,22 @@
 #!/bin/bash
-# Build gate for Search AI v3: signature + certificate match, badging,
+# Build gate for Search AI v4: signature + certificate match, badging,
 # banned-string scan, and the resources.arsc Stored check.
 # Build tier only: it never proves anything on the user's phone.
 set -euo pipefail
 export PATH="$HOME/jdk21/bin:$PATH"
 BT="$HOME/android-sdk/build-tools/34.0.0"
-APK="$HOME/workspace/Search-AI-v3.apk"
-V1="$HOME/workspace/Search-AI-v2.apk"
+APK="$HOME/workspace/Search-AI-v4.apk"
+V1="$HOME/workspace/Search-AI-v3.apk"
 VOCAB="$HOME/workspace/SAT-Vocab-Builder-v13.apk"
 
 echo "== apksigner verify =="
 "$BT/apksigner" verify --print-certs "$APK"
 
-echo "== cert match v2 =="
+echo "== cert match v3 =="
 C2="$("$BT/apksigner" verify --print-certs "$APK" | grep -i 'SHA-256' | head -1)"
 C1="$("$BT/apksigner" verify --print-certs "$V1" | grep -i 'SHA-256' | head -1)"
 if [ "$C2" = "$C1" ]; then
-  echo "CERT MATCHES V2"
+  echo "CERT MATCHES V3"
 else
   echo "CERT MISMATCH"; exit 1
 fi

@@ -303,4 +303,91 @@ public class SearchAiTest {
     assertNull(WordIndex.cefrFor("Outlaw"));
     assertNull(WordIndex.cefrFor(null));
   }
+
+  // ---- v4: multi-entry dictionary parsing (the rebel bug) ----
+  // The live API returns TWO entries for "rebel" (noun + verb). v3
+  // read only root[0] and dropped the verb entry, including its
+  // synonyms ("defy") and antonyms ("obey", "submit"). v4 merges
+  // every entry. This fixture is the real API shape, trimmed.
+
+  private static final String REBEL_JSON =
+      "[{\"word\":\"rebel\",\"phonetic\":\"/ˈɹɛbəl/\",\"meanings\":["
+      + "{\"partOfSpeech\":\"noun\",\"definitions\":["
+      + "{\"definition\":\"A person who resists an established authority, often violently\"},"
+      + "{\"definition\":\"A person from the Confederate States of America\"}],"
+      + "\"synonyms\":[],\"antonyms\":[]}]},"
+      + "{\"word\":\"rebel\",\"phonetic\":\"/ɹɪˈbɛl/\",\"meanings\":["
+      + "{\"partOfSpeech\":\"verb\",\"definitions\":["
+      + "{\"definition\":\"To resist or become defiant toward an authority.\"}],"
+      + "\"synonyms\":[\"defy\"],\"antonyms\":[\"obey\",\"submit\"]}]}]";
+
+  @Test
+  public void dictParseMultiEntry() {
+    DictParser.DictEntry e = DictParser.parse(REBEL_JSON);
+    assertNotNull(e);
+    assertEquals("rebel", e.word);
+    assertEquals(3, e.defs.size());
+    assertEquals("noun", e.defs.get(0).pos);
+    assertEquals("A person who resists an established authority, often violently",
+        e.defs.get(0).definition);
+    assertEquals("verb", e.defs.get(2).pos);
+    assertEquals("To resist or become defiant toward an authority.",
+        e.defs.get(2).definition);
+    assertTrue(e.synonyms.contains("defy"));
+    assertTrue(e.antonyms.contains("obey"));
+    assertTrue(e.antonyms.contains("submit"));
+    // Neither entry carries an example: the honest card shows a note,
+    // never an invented example. The parser stores a missing example
+    // as an empty string, which the renderer treats as "none".
+    assertEquals("", e.defs.get(0).example);
+    assertEquals("", e.defs.get(2).example);
+  }
+
+  @Test
+  public void dictPosRoundTrip() {
+    DictParser.DictEntry e = DictParser.parse(OUTLAW_JSON);
+    assertNotNull(e);
+    String json = DictParser.toJson(e);
+    assertNotNull(json);
+    DictParser.DictEntry back = DictParser.fromJson(json);
+    assertNotNull(back);
+    assertEquals(e.defs.size(), back.defs.size());
+    for (int i = 0; i < e.defs.size(); i++) {
+      assertEquals(e.defs.get(i).pos, back.defs.get(i).pos);
+      assertEquals(e.defs.get(i).definition, back.defs.get(i).definition);
+    }
+  }
+
+  // ---- v4: verified yelling entry (transcribed from the web
+  // result screenshot, never invented) ----
+
+  @Test
+  public void verifiedYelling() {
+    VerifiedEntries.Entry v = VerifiedEntries.get("yelling");
+    assertNotNull(v);
+    assertEquals("yelling", v.word);
+    assertEquals("The act of making a loud vocal sound, often in anger or excitement.",
+        v.definition);
+    assertEquals("He yelled directions to the party from the car.", v.example);
+    assertEquals(5, v.alternatives.size());
+    assertEquals("B1", v.cefr);
+    assertNotNull(v.hook);
+    assertTrue(v.hook.indexOf("wide-open mouth") >= 0);
+    assertNotNull(v.scene);
+    assertEquals(2, v.meanings.size());
+  }
+
+  @Test
+  public void hookFor() {
+    assertNotNull(VerifiedEntries.hookFor("austere"));
+    assertNotNull(VerifiedEntries.hookFor("yelling"));
+    assertNull(VerifiedEntries.hookFor("outlaw"));
+    assertNull(VerifiedEntries.hookFor(null));
+  }
+
+  @Test
+  public void cefrYelling() {
+    assertEquals("B1", WordIndex.cefrFor("yelling"));
+    assertEquals("B1", WordIndex.cefrFor("YELLING"));
+  }
 }

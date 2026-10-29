@@ -138,8 +138,9 @@ public class WordIndex {
 
   /** Verified CEFR levels, from user-provided material only.
 
-      The web home screenshot gives exactly five: Favoritism C1,
+      The web home screenshot gives five: Favoritism C1,
       Interpretation B2, Helpful A2, Transcendence C2, Eloquent C1.
+      The web result screenshot for "yelling" gives a sixth: B1.
       Every other word returns null (no badge), never an invented level. */
   public static String cefrFor(String word) {
     if (word == null) return null;
@@ -149,6 +150,7 @@ public class WordIndex {
     if (w.equals("helpful")) return "A2";
     if (w.equals("transcendence")) return "C2";
     if (w.equals("eloquent")) return "C1";
+    if (w.equals("yelling")) return "B1";
     return null;
   }
 }
