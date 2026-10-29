@@ -1,5 +1,5 @@
 #!/bin/bash
-# Search AI APK v4 build (repository copy).
+# Search AI APK v5 build (repository copy).
 # This script differs deliberately from the working build script: it uses
 # repository-relative paths and takes the keystore password from an
 # environment variable, so it runs without any local file the repo does
@@ -12,8 +12,9 @@
 # crashes on this app's anonymous classes.
 # Signing: point KS at your own debug keystore and KS_ALIAS at its alias,
 # then set APK_KS_PASS to the keystore password before running.
-# v3 on top of v2: web home shape, keyless dictionary full entries with
-# local cache, CEFR badges only where verified, on-device speaker.
+# v5 on top of v4: select-to-translate popup (Save, Hear, Copy, More, Close),
+# full dictionary card (per-word FA for synonyms and antonyms), Settings-only
+# ChatGPT API option, word-file export via share sheet.
 set -euo pipefail
 export PATH="$HOME/jdk21/bin:$PATH"
 SDK="$HOME/android-sdk"
@@ -45,9 +46,9 @@ cd dex && jar uf ../app-unsigned.apk classes.dex && cd ..
 "$BT/zipalign" -f 4 app-unsigned.apk app-aligned.apk
 "$BT/apksigner" sign --ks "$KS" --ks-key-alias "$KS_ALIAS" \
   --ks-pass "env:APK_KS_PASS" --key-pass "env:APK_KS_PASS" \
-  --out ./Search-AI-v4.apk app-aligned.apk
+  --out ./Search-AI-v5.apk app-aligned.apk
 
 echo "== verify =="
-"$BT/apksigner" verify ./Search-AI-v4.apk && echo "SIGNATURE OK"
-"$BT/aapt2" dump badging ./Search-AI-v4.apk | head -4
-ls -la ./Search-AI-v4.apk
+"$BT/apksigner" verify ./Search-AI-v5.apk && echo "SIGNATURE OK"
+"$BT/aapt2" dump badging ./Search-AI-v5.apk | head -4
+ls -la ./Search-AI-v5.apk

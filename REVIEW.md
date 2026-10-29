@@ -1,159 +1,221 @@
-# Search AI APK v4 — review notes
+# Search AI APK v5 — review notes
 
-## What v4 is
+## What v5 is
 
-An exact-visual-match rebuild of the standalone Search AI app against the
-user's WEB screenshots, answering the v3 phone rejection ("nothing look
-like the web app"). Same app, package `com.sobhan.searchai`, versionCode 4,
-versionName 4.0, same debug keystore and same `searchai` store as v3, so
-it installs over v3 and keeps saved words and history.
+Version 5 of the standalone Search AI app, built on v4 (not a restart).
+Same app, package `com.sobhan.searchai`, versionCode 5, versionName 5.0,
+same debug keystore and same `searchai` store as v4, so it installs over
+v4 and keeps saved words and history. It answers two user reports on v4:
 
-Visual targets (read as images, not descriptions):
-- Web home: `user/files/1000040908_10_t5fz.jpg` and
-  `user/files/1000040917_17_kkh9.jpg`
-- Web result page for "yelling": `user/files/1000040919_16_k79o.jpg`
-- Web Show card for YELLING: `user/files/1000040921_15_pi69.jpg`
-- v3 phone screenshots (what NOT to repeat):
-  `user/files/1000040915_13_awo4.jpg`,
-  `user/files/1000040913_14_otrk.jpg`
+1. The select-to-translate tip showed but did nothing: v4 marked text
+   selectable but had no selection handling and no popup code at all.
+2. After a search, the card must carry all dictionary information, not
+   just the main meaning.
 
-## The 8 web-versus-v3 differences, and how each was fixed
+Targets read as images, not descriptions:
 
-1. Buttons and colors: v3's purple accent (`0xFF9B8CFF`) and full-width
-   purple Look up block are gone. The accent is now the web's dark brick
-   red `0xFF65271D`, sampled twice from the result screenshot, used for
-   the small Look up pill only. All other pills are dark `0xFF26262F`.
-2. Chips versus rows: Recent searches and Try a word are now small inline
-   wrapping chips (`FlowLayout`, several per row), with the remove X ON
-   the Recent chip itself. No more full-width rows or separate remove box.
-3. History and Settings: small right-aligned dark pills with drawn icons
-   (clock, gear), not large side-by-side buttons.
-4. Input: no separate heading plus input box. One large transparent
-   EditText (34sp bold, dimmed `0xFF8A8580` hint "Type any word...") with
-   the Look up pill, English ⇄ Persian direction indicator, FA label,
-   and speaker inline in the row below it.
-5. My Words cards: word bold 18sp with Persian below on the left; Saved
-   (dark pill, dim text) or Learned (green text) pill plus CEFR as plain
-   bold text with NO pill background on the right, matching the web.
-   CEFR only for the six verified levels: Favoritism C1, Interpretation
-   B2, Helpful A2, Transcendence C2, Eloquent C1, and now yelling B1
-   (transcribed from the result screenshot). All other words show no
-   badge, never an invented level.
-6. Information given out: the result page is now the web's full stack —
-   word header with X, scrollable tabs (Translation, Definitions,
-   Examples, Synonyms, Similar), "New word" + CEFR row, TRANSLATION card
-   (Persian plus alternatives list), "All definitions" and "Similar word"
-   buttons, word card (word + speaker, pos + definition + FA pill, Save
-   + Show card with bookmark/image icons), MEMORY HOOK card, full-width
-   Mark learned, archive note, "No AI selected" note. The Show card adds
-   the LEARNING badge, "THE MEANING, IN ACTION" caption + scene text,
-   example inset + FA pill, gold Memory hook label, action row
-   (add / heart / share / swap N/M / Tell Me More), the swap hint, and
-   Close. Tell Me More opens a detail view with only the sections the
-   app can provide (definitions, examples, synonyms, hook, similar).
-7. Theme: page `0xFF0B0A0F`, cards `0xFF1C1C24`, insets/chips
-   `0xFF26262F`, text white, secondary `0xFFA3A3AD`, green
-   `0xFF34D399`, teal `0xFF2DD4BF`, blue `0xFF3B82F6`, gold `0xFFFBBF24`,
-   purple `0xFFA855F7` (LEARNING badge only). No purple-tinted cards
-   or buttons remain.
-8. Icons: all drawn on canvas (`IconView`: speaker, clock, gear,
-   bookmark, image, share, add, heart, swap, check) — no emojis. The
-   only typographic marks are the web's own × (chip remove, header X)
-   and › (Similar word button).
+- Popup target (web app's select-to-translate popup):
+  `user/files/1793314363678_20_f0bp.jpeg`
+- v4 phone screenshot with the broken tip circled:
+  `user/files/1793314200273_19_39cj.jpeg`
 
-## The rebel bug: root cause and fix (proven, not guessed)
+## Part A — select-to-translate popup
 
-v3's `DictParser.parse()` read only `root[0]` of the dictionary
-response. The live API returns TWO entries for "rebel": a noun entry
-(2 definitions, no examples, no synonyms/antonyms) and a verb entry
-(1 definition "To resist or become defiant toward an authority.",
-synonyms ["defy"], antonyms ["obey", "submit"], also no example).
-v3 dropped the whole verb entry, so the phone card showed exactly 2
-bare meanings and no synonyms/antonyms. v4's parser loops over ALL
-root entries and merges meanings, definitions, synonyms, and antonyms;
-each definition now also carries its own part of speech, which survives
-the JSON cache round-trip (new `p` field, with fallback to the entry
-pos for pre-v4 caches). Test `dictParseMultiEntry` pins the real rebel
-shape. Note: rebel genuinely has NO example in this source, so v4
-shows the honest "No example available for this word." note for it
-rather than inventing one; examples appear whenever the source
-provides them.
+Layout matches the target bottom card: selected word bold top-left,
+circular X top-right, translation large and right-aligned for Persian
+(left-aligned for English), alternatives smaller on the same alignment
+below it, button row Save (bookmark icon), Hear (speaker icon), Copy,
+More, Close. No Translate button inside the popup; the translation
+appears instantly.
 
-Also fixed in passing: v3's misleading "No offline entry" line, which
-stayed visible above a fetched card, is removed entirely.
+Implementation:
 
-## Kept from v3 (no regressions)
+- New `SelTextView` (a TextView subclass reporting non-empty selection
+  changes, deduped, resetting when the selection collapses so
+  re-selecting the same word fires again). Content text uses it: home
+  headings, tip text, My Words words, saved/history rows, card
+  definitions, examples, hooks, translation text, alternatives, the
+  word-card word, Show card scene/hook/example, detail hook/example,
+  and ChatGPT section bodies. Button and chip labels stay plain
+  non-selectable TextViews, as on the web. Popup views are plain
+  TextViews, never SelTextView, so selecting popup text cannot
+  retrigger the popup.
+- The popup is a full-screen overlay added via `addContentView`
+  (transparent dismiss view plus the bottom card), so it works from
+  any screen without restructuring the root layout. It hides on every
+  screen change and on every new lookup, so a stale popup never
+  overlays a new screen. Close, X, and an outside tap all dismiss it.
+- Fast path only, never a key, never an AI call: bundled entry first
+  (English word -> stored Persian; Persian selection -> reverse-index
+  hits, first hit as the translation, further hits as alternatives),
+  then the translation cache, then keyless machine translation (the
+  existing gtx path with MyMemory fallback). Alternatives come from
+  MyMemory's matches array, filtered (no empties, no main translation,
+  no echo, no duplicates, capped at 5) and filled in when ready; the
+  alternatives line stays hidden when the source gives none. A
+  sequence guard drops stale responses when the user selects another
+  word before an earlier fetch returns.
+- Save files the word into Saved Words instantly and syncs the
+  result/card pills; it also caches the translation under the saved
+  word so opening it later shows the translation. Hear reuses the
+  existing speech path (Persian voice for Persian text, English voice
+  otherwise, on-device, no network). Copy copies the translation (or
+  the word while translating) and briefly shows "Copied".
+- More dismisses the popup, then runs the normal lookup for the
+  selected word and files it into Saved Words, so the full card is
+  created, not just previewed. With a ChatGPT key saved it includes
+  the ChatGPT sections; without one it is dictionary only. A word
+  with no dictionary entry shows its translation plus a plain note.
+- The operating system's own selection toolbar (Translate, Copy,
+  Select all) appears naturally from selectable text and coexists
+  with the app popup, exactly as in the target screenshot; the app
+  neither adds nor removes it.
 
-dictionaryapi.dev full entries (keyless) with `dict::` persistence for
-offline repeat lookups; Save filing the full entry; FA tap-to-reveal
-throughout; instant Save; back stack with tag-synced pills (FA reveal
-survives Back); script-based direction detection; echo treated as no
-result; "service unavailable" error text; scroll reset; case-insensitive
-history/saved; full configChanges; ripple feedback; keyboard Search
-action; org.json parser; MyMemory fallback; translation cache (capped
-200); in-memory sets; Persian reverse index; tests; verify.sh.
+## Part B — full dictionary card
 
-## What v4 does NOT do (honest limits)
+- The dictionary parser already merged all root entries and both
+  meaning-level and definition-level synonyms/antonyms; v5 raises its
+  caps (definitions 8 -> 30, words 12 -> 30) so realistic entries are
+  never truncated, and the JSON cache round-trip preserves every
+  field.
+- Synonyms and antonyms changed from chips plus one joined FA pill
+  (which translated the whole list as a single phrase) to one row per
+  word: the word (tap to search) plus its own FA pill (tap for that
+  word's Persian). Bundled synonyms use their stored Persian
+  instantly; others translate on tap and cache. Definitions and
+  examples already had individual FA pills; those are unchanged.
+- The result stack (word card plus Definitions, Examples, Synonyms,
+  Similar sections, plus All definitions) therefore carries every
+  definition, every example, every synonym, and every antonym the
+  source provides, each with FA tap-to-reveal, plus Save, Show card,
+  and Mark learned. The word card itself is not crammed with the
+  sections; they live in the stack below it, preserving the web
+  layout.
+- Verified hooks (AUSTERE and yelling only, user-provided text) still
+  appear where available. No other hook, overview, or background text
+  is ever invented; a section with no source data shows a plain note.
 
-- NO picture panel on the Show card. The web card's generated
-  illustration cannot be matched by a key-free APK (no image
-  generation, no bundleable picture for new words). The caption plus
-  scene text appear as a text panel; there is NO Repaint button and NO
-  "Picture doesn't match the meaning? Repaint it" link, because both
-  would be dead without a picture. Never a fake picture.
-- Show card counter reflects APK-available meanings only (yelling 1/2,
-  rebel 1/3), NOT the web's 1/4 — the web's other two yelling meanings
-  are not visible in the screenshots and cannot be invented.
-- Show card default meaning is the result-page (primary) meaning, even
-  though the web Show card screenshot shows the short meaning as
-  "Meaning 1". v4 keeps one saved meaning index per word for
-  consistency between the result page and the card.
-- LEARNING badge is presentational (it matches the reference card's
-  state, not a server status). Heart likes are local-only (stored in
-  prefs), not a server count.
-- FA reveal state is lost on the single re-render that happens when
-  returning from a Show card after a meaning swap (the result must
-  re-render to show the newly chosen meaning). All other Back
-  navigation preserves FA reveal state.
-- No Gmail sign-in, no OAuth, no cloud code, no live AI answers, no
-  web-app sync. MyMemory's anonymous rate limit is unverified; if
-  rate-limited, the app reports "service unavailable" rather than a
-  wrong result. A dictionary 404 (word the source lacks) shows the
-  translation plus "Full entry not available.", never a fake entry.
-- The swap saves one meaning index per word; the web's per-card swap
-  state is not separately tracked.
+## Settings-only ChatGPT API option
 
-## Verification (build tier only — NOT phone-tested)
+Default is key-free: dictionary card only, no banners, no prompts, no
+key field on any screen except Settings. Settings gains one ChatGPT
+key card: an empty password input plus Save when no key is saved; a
+masked label (last 4 characters only) plus Change and Remove when one
+is saved. Change shows an empty input, never the saved key. The key
+lives only in the app's own store, is never logged, and is never
+shown in full.
 
-- `build-searchai4.sh`: javac (source 8, android.jar bootclasspath) +
-  aapt2 link + stable R8 dex + zipalign + apksigner. One non-fatal
-  note only: the onBackPressed override is deprecated at this target
-  but still works.
-- JVM tests: 25 pass (15 carried from v2, 5 new in v3, 5 new in v4:
-  dictParseMultiEntry, dictPosRoundTrip, verifiedYelling, hookFor,
-  cefrYelling). FlowLayout, IconView, and MainActivity are Android-only
-  and are excluded from JVM tests, as in v3.
-- `verify-searchai4.sh`: GATE PASSED — apksigner verify OK (CN=SobhaN),
-  certificate SHA-256 `e1733f5112c8ac821d71e9b5cfa4593d9b33c74a7e2b3f9308fadfc88faf22fd`
-  matches v3, badging package `com.sobhan.searchai` versionCode 4
-  versionName 4.0 sdk 24 target 34 INTERNET only label "Search AI",
-  dex banned-string scan 0, resources.arsc Stored, vocab APK untouched.
-- Source, manifest, resources, and tests scan: 0 banned brand names
-  strings. Staged source is diff-verified byte-identical to the
-  working source (build.sh/verify.sh/REVIEW.md are repo-adapted by
-  design). Staged dir contains no keystore, no password, no APK.
-- v1 (33,176 bytes), v2 (37,273 bytes), v3 (45,465 bytes) untouched by
-  size and date. v4 is 53,657 bytes.
+When a key is saved, the result card gains ChatGPT sections (overview,
+background, memory hook, AI answer) from the real API (gpt-4o-mini,
+JSON mode, low temperature, bounded tokens, 15s connect / 25s read
+timeouts, per-word cache). Validation matches the web app: unparseable
+or wrongly typed top-level JSON falls back to the dictionary card;
+a missing or empty field omits that section only. Each section carries
+a small "ChatGPT" tag so ChatGPT-written content is distinguishable
+from dictionary content. A verified hook keeps its own MEMORY HOOK
+card; the ChatGPT hook only fills the gap. Removing the key hides the
+sections even if cached. A small status note appears only when a key
+is saved and the call fails; with no key saved there is no note at all.
 
-## Phone test list owed
+The provider on/off toggles and "Use for answers" pills from v4 remain
+in Settings, unchanged, but content is now gated by the key alone.
 
-Install over v3 with saved words and history surviving; home matches
-the web home screenshot (input-as-heading, small Look up pill, small
-History/Settings pills, wrapping chips with X on the chip); chip
-remove; "outlaw" online to full card with FA plus instant Save;
-"outlaw" offline on repeat to full card; "rebel" to full card with
-synonyms/antonyms and the no-example note; "yelling" to the verified
-web entry (B1, Persian plus alternatives, hook) plus Show card, swap
-through both meanings, and Tell Me More; Saved Words to full entry;
-Back from card/detail/saved/history/settings; FA surviving Back;
-rotate plus dark-mode toggle.
+## Word-file export
+
+A "Word file" button (download icon, distinct from the generic share
+icon) sits on the word card and on each Saved Words entry. Tapping it
+writes one JSON file for the word and opens the Android share sheet,
+so the user can save it to Downloads or send it via Telegram,
+WhatsApp, Drive, or email. It works offline (the entry is already
+local) and needs no storage permission: the file is written to the
+app cache and served by a minimal read-only content provider
+(`WordFileProvider`, no library) with a per-URI read grant.
+
+File name: `<word>.json`, lowercase, spaces replaced by hyphens
+("heads-up.json"). Contents are exactly what the app holds, missing
+sections omitted, never faked: word, parts of speech, definitions
+(each with its examples), synonyms, antonyms, Persian plus Persian
+alternatives, phonetic if present, memory hook if actually available,
+"meaning in action" scene text if present, CEFR if verified, source
+(bundled, dictionary, verified, or translation), and the date
+searched (recorded on every search from v5 on; older words fall back
+to the export date). Translation-only words hold the translation plus
+a plain note. The file holds word data, not a picture: no image is
+ever embedded.
+
+## Kept from v4 (no regressions)
+
+Web home shape, brick red Look up pill, dark pills, inline wrapping
+chips with X on the chip, small History/Settings pills with drawn
+icons, transparent input, My Words cards, full result stack (tabs,
+New word + CEFR, TRANSLATION card with alternatives, All definitions,
+Similar word, word card with icons, MEMORY HOOK card only when a hook
+is actually available, Mark learned, archive note), Show card
+(LEARNING badge, caption + scene text, example inset, gold hook
+label, action row, swap N/M, Tell Me More with providable sections
+only, Close, NO picture panel, NO Repaint button), dictionaryapi.dev
+full entries with `dict::` persistence, instant Save, back stack with
+syncButtons, script detection, echo-as-no-result, translation cache,
+reverse index, tests, verify gate. Credit by SobhaN. Zero banned
+brand-name strings in source, manifest, or dex (verified by scan;
+the only accepted hit is verify.sh's own grep pattern).
+
+## What v5 does NOT do
+
+- No picture panel and no Repaint button anywhere (key-free; the
+  Show card keeps its caption + scene text panel). Pictures arrive
+  with v6, not here.
+- ChatGPT sections exist only when the user voluntarily saves a key
+  in Settings; by default the app is dictionary only and never asks.
+- No Gmail/Google sign-in, no cloud sync, no Play Store route. Saved
+  words and history stay on the phone.
+- No live AI answers other than the optional ChatGPT sections above.
+
+## Verification (build tier only, not phone proof)
+
+- `build-searchai5.sh`: aapt2 compile/link, javac, stable R8 dex,
+  zipalign, apksigner sign. One compile error on the first pass
+  (`TextView.setSelection` is not in the public SDK stubs); fixed by
+  resetting the selection-report dedup plus `clearFocus` instead.
+  Final build clean apart from the pre-existing onBackPressed
+  deprecation note.
+- `verify-searchai5.sh`: GATE PASSED — apksigner verify, certificate
+  SHA-256 matching v4, badging (package `com.sobhan.searchai`,
+  versionCode 5, versionName 5.0, minSdk 24, targetSdk 34, INTERNET
+  only), dex banned-string scan 0, resources.arsc Stored, vocab APK
+  untouched, v1–v4 md5-verified untouched.
+- JVM tests: 36 pass (25 carried from v4, 11 new in v5: dictionary
+  completeness, raised caps, JSON round-trip completeness, ChatGPT
+  JSON validation, MyMemory matches parsing, mixed-script detection,
+  word-file contents, phrase filenames, translation-only omissions).
+- The popup and the full card were verified by code trace plus these
+  tests only: selection reporting, fast-path order, sequence guard,
+  Save/Hear/Copy/More/Close wiring, per-word FA rows, and word-file
+  contents. The APK has NOT been installed or tapped through on the
+  user's phone in this environment, and network paths (dictionary
+  entry, translation fallback, speech, ChatGPT call, share sheet)
+  have not been exercised on a device. The phone test decides.
+
+## Phone test list (for the v5 delivery)
+
+Install over v4 with data surviving; home match; select text on home
+(tip line, headings, My Words word) -> bottom popup with instant
+translation, alternatives where the source gives them, working Save,
+Hear, Copy, More, Close, X, and outside-tap dismiss; select text on a
+result page and on a Show card/detail view -> same popup; popup Save
+files into Saved Words; popup Hear speaks the selected text in its
+own language; popup Copy copies the translation; popup More opens
+the full card for the selected word and files it into Saved Words
+(dictionary sections, plus hook/scene where available, no picture,
+no Repaint); a word with definitions, examples, synonyms, and
+antonyms shows all of them in the card/tabs with FA tap-to-reveal; a
+word the dictionary lacks shows translation plus plain note only;
+Settings shows the ChatGPT key card ONLY in Settings (no key field,
+banner, or prompt on search/result/card/popup screens); with no key
+saved, the app behaves exactly as key-free (dictionary only, no nag);
+with a key saved (only if the user chooses to test this), the card
+gains labeled ChatGPT sections and falls back to dictionary on
+failure; Word file on a card and on a Saved Words entry -> share
+sheet -> save to Downloads / send via Telegram -> file opens as JSON
+with the right fields and no picture; Back from card/detail/saved/
+history/settings; FA surviving Back; rotate plus dark-mode toggle.

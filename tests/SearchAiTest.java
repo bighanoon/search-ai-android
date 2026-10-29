@@ -390,4 +390,226 @@ public class SearchAiTest {
     assertEquals("B1", WordIndex.cefrFor("yelling"));
     assertEquals("B1", WordIndex.cefrFor("YELLING"));
   }
+
+  // ---- v5: full dictionary card (nothing dropped) ----
+
+  private static final String AMPLE_JSON =
+      "[{\"word\":\"ample\",\"meanings\":[{\"partOfSpeech\":\"adj\","
+      + "\"definitions\":[{\"definition\":\"Enough.\",\"example\":\"Ample time.\","
+      + "\"synonyms\":[\"plenty\"],\"antonyms\":[\"scarce\"]},"
+      + "{\"definition\":\"Large.\",\"example\":\"Ample room.\","
+      + "\"synonyms\":[\"spacious\"],\"antonyms\":[\"tiny\"]}],"
+      + "\"synonyms\":[\"sufficient\"],\"antonyms\":[\"meager\"]}]},"
+      + "{\"word\":\"ample\",\"meanings\":[{\"partOfSpeech\":\"noun\","
+      + "\"definitions\":[{\"definition\":\"An example.\","
+      + "\"example\":\"An ample of courage.\",\"synonyms\":[\"sample\"],"
+      + "\"antonyms\":[]}]}]}]";
+
+  @Test
+  public void dictParseCompleteness() {
+    DictParser.DictEntry e = DictParser.parse(AMPLE_JSON);
+    assertNotNull(e);
+    assertEquals(3, e.defs.size());
+    assertEquals("adj", e.defs.get(0).pos);
+    assertEquals("Enough.", e.defs.get(0).definition);
+    assertEquals("Ample time.", e.defs.get(0).example);
+    assertEquals("noun", e.defs.get(2).pos);
+    assertEquals("An ample of courage.", e.defs.get(2).example);
+    assertTrue(e.synonyms.contains("plenty"));
+    assertTrue(e.synonyms.contains("spacious"));
+    assertTrue(e.synonyms.contains("sufficient"));
+    assertTrue(e.synonyms.contains("sample"));
+    assertTrue(e.antonyms.contains("scarce"));
+    assertTrue(e.antonyms.contains("tiny"));
+    assertTrue(e.antonyms.contains("meager"));
+  }
+
+  @Test
+  public void dictCapsRaised() {
+    StringBuilder sb = new StringBuilder();
+    sb.append("[{\"word\":\"many\",\"meanings\":[{\"partOfSpeech\":\"adj\","
+        + "\"definitions\":[");
+    for (int i = 0; i < 10; i++) {
+      if (i > 0) sb.append(",");
+      sb.append("{\"definition\":\"Sense ").append(i).append(".\"}");
+    }
+    sb.append("]}]}]");
+    DictParser.DictEntry e = DictParser.parse(sb.toString());
+    assertNotNull(e);
+    assertEquals(10, e.defs.size());
+    assertEquals("Sense 9.", e.defs.get(9).definition);
+  }
+
+  @Test
+  public void dictJsonRoundTripCompleteness() {
+    DictParser.DictEntry e = DictParser.parse(AMPLE_JSON);
+    assertNotNull(e);
+    DictParser.DictEntry back =
+        DictParser.fromJson(DictParser.toJson(e));
+    assertNotNull(back);
+    assertEquals(e.defs.size(), back.defs.size());
+    for (int i = 0; i < e.defs.size(); i++) {
+      assertEquals(e.defs.get(i).pos, back.defs.get(i).pos);
+      assertEquals(e.defs.get(i).definition, back.defs.get(i).definition);
+      assertEquals(e.defs.get(i).example, back.defs.get(i).example);
+    }
+    assertEquals(e.synonyms, back.synonyms);
+    assertEquals(e.antonyms, back.antonyms);
+  }
+
+  // ---- v5: ChatGPT sections parser (strict top level, lenient fields) ----
+
+  @Test
+  public void chatGptParseValid() {
+    ChatGptSections.Sections s = ChatGptSections.parse(
+        "{\"overview\":\"O.\",\"background\":\"B.\","
+        + "\"hook\":\"H.\",\"answer\":\"A.\"}");
+    assertNotNull(s);
+    assertEquals("O.", s.overview);
+    assertEquals("B.", s.background);
+    assertEquals("H.", s.hook);
+    assertEquals("A.", s.answer);
+    assertTrue(ChatGptSections.hasAny(s));
+  }
+
+  @Test
+  public void chatGptParsePartial() {
+    ChatGptSections.Sections s = ChatGptSections.parse(
+        "{\"overview\":\"O.\",\"answer\":\"A.\"}");
+    assertNotNull(s);
+    assertEquals("O.", s.overview);
+    assertEquals("A.", s.answer);
+    assertNull(s.background);
+    assertNull(s.hook);
+  }
+
+  @Test
+  public void chatGptParseInvalid() {
+    assertNull(ChatGptSections.parse(null));
+    assertNull(ChatGptSections.parse("not json"));
+    assertNull(ChatGptSections.parse("[1, 2]"));
+    assertNull(ChatGptSections.parse("\"just a string\""));
+    ChatGptSections.Sections empty = ChatGptSections.parse("{}");
+    assertNotNull(empty);
+    assertFalse(ChatGptSections.hasAny(empty));
+    // A wrongly typed field is omitted, not fatal to the rest.
+    ChatGptSections.Sections mixed = ChatGptSections.parse(
+        "{\"overview\":42,\"answer\":\"A.\"}");
+    assertNotNull(mixed);
+    assertNull(mixed.overview);
+    assertEquals("A.", mixed.answer);
+  }
+
+  // ---- v5: popup alternatives (MyMemory matches) ----
+
+  @Test
+  public void myMemoryMatches() {
+    String json = "{\"responseData\":{\"translatedText\":\"x\",\"match\":1},"
+        + "\"responseStatus\":200,\"matches\":["
+        + "{\"translation\":\"main\",\"quality\":\"100\"},"
+        + "{\"translation\":\"first\",\"quality\":\"80\"},"
+        + "{\"translation\":\"learned\",\"quality\":\"70\"},"
+        + "{\"translation\":\"first\",\"quality\":\"60\"},"
+        + "{\"translation\":\"\",\"quality\":\"50\"},"
+        + "{\"translation\":\"second\",\"quality\":\"40\"},"
+        + "{\"translation\":\"third\",\"quality\":\"30\"},"
+        + "{\"translation\":\"fourth\",\"quality\":\"20\"},"
+        + "{\"translation\":\"fifth\",\"quality\":\"10\"}]}";
+    List<String> alts =
+        GtxParser.parseMyMemoryMatches(json, "main", "learned");
+    assertEquals(5, alts.size());
+    assertEquals("first", alts.get(0));
+    assertEquals("second", alts.get(1));
+    assertEquals("third", alts.get(2));
+    assertEquals("fourth", alts.get(3));
+    assertEquals("fifth", alts.get(4));
+    assertTrue(GtxParser.parseMyMemoryMatches("garbage", "m", "q").isEmpty());
+    assertTrue(GtxParser.parseMyMemoryMatches(
+        "{\"responseStatus\":403,\"matches\":[]}", "m", "q").isEmpty());
+  }
+
+  @Test
+  public void isPersianMixedPhrase() {
+    assertTrue(WordIndex.isPersian("hello سخت"));
+    assertFalse(WordIndex.isPersian("hello"));
+  }
+
+  // ---- v5: word-file export (data only, never a picture) ----
+
+  private WordFileBuilder.Entry fullEntry() {
+    WordFileBuilder.Entry e = new WordFileBuilder.Entry();
+    e.word = "Austere";
+    e.partsOfSpeech.add("adj.");
+    e.definitions.add(new WordFileBuilder.Def("adj.",
+        "Severe or strict.", "The austere room was bare."));
+    e.synonyms.add("Stern");
+    e.antonyms.add("Lavish");
+    e.persian = "سخت‌گیر";
+    e.persianAlternatives.add("جدی");
+    e.phonetic = "aw-STEER";
+    e.memoryHook = "Picture a steer in a bare barn.";
+    e.scene = "A bare room, almost nothing in it.";
+    e.cefr = "B1";
+    e.source = "bundled";
+    e.dateSearched = "2026-10-29";
+    return e;
+  }
+
+  @Test
+  public void wordFileBundled() throws Exception {
+    String json = WordFileBuilder.buildJson(fullEntry());
+    org.json.JSONObject o = new org.json.JSONObject(json);
+    assertEquals("Austere", o.getString("word"));
+    assertEquals("adj.", o.getJSONArray("partsOfSpeech").getString(0));
+    assertEquals(1, o.getJSONArray("definitions").length());
+    assertEquals("Severe or strict.",
+        o.getJSONArray("definitions").getJSONObject(0)
+            .getString("definition"));
+    assertEquals("The austere room was bare.",
+        o.getJSONArray("definitions").getJSONObject(0)
+            .getString("example"));
+    assertEquals("Stern", o.getJSONArray("synonyms").getString(0));
+    assertEquals("Lavish", o.getJSONArray("antonyms").getString(0));
+    assertEquals("سخت‌گیر", o.getString("persian"));
+    assertEquals("جدی", o.getJSONArray("persianAlternatives").getString(0));
+    assertEquals("aw-STEER", o.getString("phonetic"));
+    assertEquals("Picture a steer in a bare barn.", o.getString("memoryHook"));
+    assertEquals("A bare room, almost nothing in it.", o.getString("scene"));
+    assertEquals("B1", o.getString("cefr"));
+    assertEquals("bundled", o.getString("source"));
+    assertEquals("2026-10-29", o.getString("dateSearched"));
+    assertFalse(json.contains("\"image\""));
+    assertFalse(json.contains("\"picture\""));
+    assertFalse(json.contains("base64"));
+  }
+
+  @Test
+  public void wordFilePhraseFilename() {
+    assertEquals("heads-up.json", WordFileBuilder.filenameFor("heads up"));
+    assertEquals("break-the-ice.json",
+        WordFileBuilder.filenameFor("Break the ice"));
+    assertEquals("austere.json", WordFileBuilder.filenameFor("austere"));
+  }
+
+  @Test
+  public void wordFileTranslationOnlyOmissions() throws Exception {
+    WordFileBuilder.Entry e = new WordFileBuilder.Entry();
+    e.word = "outlaw";
+    e.persian = "قانون‌شکن";
+    e.source = "translation";
+    e.dateSearched = "2026-10-29";
+    e.note = "Full entry not available.";
+    String json = WordFileBuilder.buildJson(e);
+    org.json.JSONObject o = new org.json.JSONObject(json);
+    assertEquals("outlaw", o.getString("word"));
+    assertEquals("قانون‌شکن", o.getString("persian"));
+    assertEquals("Full entry not available.", o.getString("note"));
+    assertFalse(o.has("definitions"));
+    assertFalse(o.has("synonyms"));
+    assertFalse(o.has("antonyms"));
+    assertFalse(o.has("memoryHook"));
+    assertFalse(o.has("scene"));
+    assertFalse(o.has("cefr"));
+    assertFalse(o.has("phonetic"));
+  }
 }

@@ -54,8 +54,10 @@ public class DictParser {
   }
 
   // Card bounds: enough for a full entry, small enough to cache safely.
-  private static final int MAX_DEFS = 8;
-  private static final int MAX_WORDS = 12;
+  // v5: raised so the full card is never truncated for realistic
+  // entries ("every definition" in the brief, not just the first 8).
+  private static final int MAX_DEFS = 30;
+  private static final int MAX_WORDS = 30;
 
   private static void addWords(List<String> out, LinkedHashSet<String> seen,
       JSONArray arr) {

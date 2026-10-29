@@ -20,6 +20,9 @@ public class IconView extends View {
   public static final int HEART = 7;
   public static final int SWAP = 8;
   public static final int CHECK = 9;
+  // v5: download (arrow into a tray) for the Word file button, clearly
+  // distinct from the SHARE node diagram.
+  public static final int DOWNLOAD = 10;
 
   private int kind = SPEAKER;
   private int color = 0xFFFFFFFF;
@@ -83,6 +86,7 @@ public class IconView extends View {
       case HEART: drawHeart(canvas); break;
       case SWAP: drawSwap(canvas); break;
       case CHECK: drawCheck(canvas); break;
+      case DOWNLOAD: drawDownload(canvas); break;
       default: break;
     }
   }
@@ -179,5 +183,12 @@ public class IconView extends View {
   private void drawCheck(Canvas c) {
     c.drawLine(22, 52, 42, 72, paint);
     c.drawLine(42, 72, 80, 28, paint);
+  }
+
+  private void drawDownload(Canvas c) {
+    c.drawLine(18, 78, 82, 78, paint);
+    c.drawLine(50, 16, 50, 62, paint);
+    c.drawLine(34, 48, 50, 64, paint);
+    c.drawLine(66, 48, 50, 64, paint);
   }
 }
