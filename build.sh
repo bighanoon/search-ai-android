@@ -1,5 +1,5 @@
 #!/bin/bash
-# Search AI APK v1 build (repository copy).
+# Search AI APK v2 build (repository copy).
 # This script differs deliberately from the working build script: it uses
 # repository-relative paths and takes the keystore password from an
 # environment variable, so it runs without any local file the repo does
@@ -12,7 +12,9 @@
 # crashes on this app's anonymous classes.
 # Signing: point KS at your own debug keystore and KS_ALIAS at its alias,
 # then set APK_KS_PASS to the keystore password before running.
-set -e
+# v2: set -euo pipefail so javac failures are never hidden; -bootclasspath
+# plus -Xlint:-options so no grep filter is needed on the javac line.
+set -euo pipefail
 export PATH="$HOME/jdk21/bin:$PATH"
 SDK="$HOME/android-sdk"
 BT="$SDK/build-tools/34.0.0"
@@ -31,11 +33,11 @@ echo "== aapt2 link =="
 echo "== javac =="
 rm -rf obj dex
 mkdir -p obj dex
-javac -encoding UTF-8 -source 8 -target 8 -cp "$AJ" -d obj \
-  src/com/sobhan/searchai/*.java 2>&1 | grep -v "obsolete\|bootstrap" || true
+javac -Xlint:-options -encoding UTF-8 -source 8 -target 8 -bootclasspath "$AJ" -d obj \
+  src/com/sobhan/searchai/*.java
 
 echo "== R8 dex =="
-java -cp "$R8_JAR" com.android.tools.r8.D8 --lib "$AJ" --min-api 24 \
+java -cp "$R8_JAR" com.android.tools.r8.D8 --release --lib "$AJ" --min-api 24 \
   --output dex obj/com/sobhan/searchai/*.class
 
 echo "== add dex, align, sign =="
@@ -43,9 +45,9 @@ cd dex && jar uf ../app-unsigned.apk classes.dex && cd ..
 "$BT/zipalign" -f 4 app-unsigned.apk app-aligned.apk
 "$BT/apksigner" sign --ks "$KS" --ks-key-alias "$KS_ALIAS" \
   --ks-pass "env:APK_KS_PASS" --key-pass "env:APK_KS_PASS" \
-  --out ./Search-AI-v1.apk app-aligned.apk
+  --out ./Search-AI-v2.apk app-aligned.apk
 
 echo "== verify =="
-"$BT/apksigner" verify ./Search-AI-v1.apk && echo "SIGNATURE OK"
-"$BT/aapt2" dump badging ./Search-AI-v1.apk | head -4
-ls -la ./Search-AI-v1.apk
+"$BT/apksigner" verify ./Search-AI-v2.apk && echo "SIGNATURE OK"
+"$BT/aapt2" dump badging ./Search-AI-v2.apk | head -4
+ls -la ./Search-AI-v2.apk

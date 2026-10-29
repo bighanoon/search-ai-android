@@ -1,14 +1,21 @@
 package com.sobhan.searchai;
 
 import android.app.Activity;
+import android.content.Context;
 import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.os.Bundle;
 import android.text.InputType;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.CompoundButton;
 import android.widget.EditText;
@@ -22,7 +29,9 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 public class MainActivity extends Activity {
@@ -34,8 +43,11 @@ public class MainActivity extends Activity {
   private static final int ACCENT = 0xFF9B8CFF;
   private static final int GREEN = 0xFF4CAF7D;
   private static final String[] PROVIDERS = {"Gemini", "ChatGPT", "Perplexity", "Claude", "Grok"};
+  private static final int TC_CACHE_CAP = 200;
+  private static final int QUERY_CAP = 500;
 
   private SharedPreferences prefs;
+  private ScrollView scrollView;
   private LinearLayout searchScreen;
   private LinearLayout savedScreen;
   private LinearLayout historyScreen;
@@ -53,24 +65,26 @@ public class MainActivity extends Activity {
   private Button navSaved;
   private Button navHistory;
   private Button navSettings;
-  private Button dirButton;
-  private boolean faDirection = false;
-  private WordsData.Word lastWord = null;
-  private String lastQuery = null;
-  private String lastTranslation = null;
-  private String lastKind = "";
-  private String cardSource = "search";
+  private ArrayDeque<String> backStack = new ArrayDeque<String>();
+  private String currentScreen = "search";
+  private LinkedHashSet<String> savedSet = new LinkedHashSet<String>();
+  private LinkedHashSet<String> learnedSet = new LinkedHashSet<String>();
+  private List<String> historyData = new ArrayList<String>();
   private int lookupId = 0;
 
   private interface TranslationCallback {
-    void onResult(String translation);
+    void onResult(GtxParser.Result result);
   }
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
     prefs = getSharedPreferences("searchai", MODE_PRIVATE);
-    faDirection = prefs.getBoolean("dir", false);
+    savedSet = new LinkedHashSet<String>(
+        ListCodec.decode(prefs.getString("saved", "")));
+    learnedSet = new LinkedHashSet<String>(
+        ListCodec.decode(prefs.getString("learned", "")));
+    historyData = ListCodec.decode(prefs.getString("history", ""));
 
     LinearLayout root = new LinearLayout(this);
     root.setOrientation(LinearLayout.VERTICAL);
@@ -91,6 +105,7 @@ public class MainActivity extends Activity {
     root.addView(header);
 
     ScrollView scroll = new ScrollView(this);
+    scrollView = scroll;
     LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(
         LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
     scroll.setLayoutParams(scrollParams);
@@ -164,13 +179,18 @@ public class MainActivity extends Activity {
     return d;
   }
 
+  private RippleDrawable ripple(int bg) {
+    return new RippleDrawable(
+        ColorStateList.valueOf(0x33FFFFFF), rounded(bg, 10), null);
+  }
+
   private Button btn(String text, int bg) {
     Button b = new Button(this);
     b.setText(text);
     b.setAllCaps(false);
     b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
     b.setTextColor(TEXT);
-    b.setBackground(rounded(bg, 10));
+    b.setBackground(ripple(bg));
     b.setPadding(dp(14), dp(10), dp(14), dp(10));
     return b;
   }
@@ -185,7 +205,7 @@ public class MainActivity extends Activity {
     b.setPadding(dp(4), dp(10), dp(4), dp(10));
     b.setOnClickListener(new View.OnClickListener() {
       public void onClick(View v) {
-        showScreen(screen);
+        navTab(screen);
       }
     });
     return b;
@@ -231,7 +251,13 @@ public class MainActivity extends Activity {
     return row;
   }
 
+  // ---- Navigation: a back stack replaces the old cardSource/last* fields.
+  // Back never exits from a non-search screen; it returns to the previous
+  // screen, and the result view is never re-rendered on Back, so revealed
+  // FA text stays revealed. ----
+
   private void showScreen(String name) {
+    currentScreen = name;
     searchScreen.setVisibility(name.equals("search") ? View.VISIBLE : View.GONE);
     savedScreen.setVisibility(name.equals("saved") ? View.VISIBLE : View.GONE);
     historyScreen.setVisibility(name.equals("history") ? View.VISIBLE : View.GONE);
@@ -241,94 +267,200 @@ public class MainActivity extends Activity {
     navSaved.setTextColor(name.equals("saved") ? ACCENT : SUB);
     navHistory.setTextColor(name.equals("history") ? ACCENT : SUB);
     navSettings.setTextColor(name.equals("settings") ? ACCENT : SUB);
+    if (scrollView != null) scrollView.scrollTo(0, 0);
     if (name.equals("saved")) refreshSaved();
     if (name.equals("history")) refreshHistory();
     if (name.equals("settings")) refreshSettings();
     if (name.equals("search")) refreshRecent();
   }
 
-  private List<String> getList(String key) {
-    List<String> out = new ArrayList<String>();
-    String raw = prefs.getString(key, "");
-    if (raw.length() == 0) return out;
-    String[] parts = raw.split("\n");
-    for (int i = 0; i < parts.length; i++) {
-      if (parts[i].length() > 0) out.add(parts[i]);
+  private void navigate(String name) {
+    if (!name.equals(currentScreen)) {
+      backStack.push(currentScreen);
+      showScreen(name);
     }
-    return out;
   }
 
-  private void setList(String key, List<String> list) {
-    StringBuilder sb = new StringBuilder();
-    for (int i = 0; i < list.size(); i++) {
-      if (i > 0) sb.append("\n");
-      sb.append(list.get(i));
-    }
-    prefs.edit().putString(key, sb.toString()).apply();
+  private void navTab(String name) {
+    backStack.clear();
+    showScreen(name);
   }
 
-  private boolean listContains(List<String> list, String v) {
-    for (int i = 0; i < list.size(); i++) {
-      if (list.get(i).equals(v)) return true;
+  @Override
+  public void onBackPressed() {
+    if (!backStack.isEmpty()) {
+      showScreen(backStack.pop());
+      return;
     }
-    return false;
+    if (!currentScreen.equals("search")) {
+      showScreen("search");
+      return;
+    }
+    super.onBackPressed();
   }
 
-  private void addToHistory(String q) {
-    List<String> h = getList("history");
-    List<String> next = new ArrayList<String>();
-    next.add(q);
-    for (int i = 0; i < h.size(); i++) {
-      if (!h.get(i).equals(q)) next.add(h.get(i));
-    }
-    while (next.size() > 50) next.remove(next.size() - 1);
-    setList("history", next);
+  private Button backButton() {
+    Button back = btn("Back", CARD2);
+    back.setOnClickListener(new View.OnClickListener() {
+      public void onClick(View v) {
+        onBackPressed();
+      }
+    });
+    return back;
+  }
+
+  private void showCard(WordsData.Word w) {
+    cardBox.removeAllViews();
+    cardBox.addView(backButton());
+    renderWordInto(cardBox, w, true);
+    navigate("card");
+  }
+
+  private void showTranslationCard(String query, String translation) {
+    cardBox.removeAllViews();
+    cardBox.addView(backButton());
+    renderTranslationInto(cardBox, query, translation, true);
+    navigate("card");
+  }
+
+  private void showFaTranslationCard(String query, String translation) {
+    cardBox.removeAllViews();
+    cardBox.addView(backButton());
+    renderFaTranslationInto(cardBox, query, translation, true);
+    navigate("card");
+  }
+
+  // ---- Storage: in-memory sets loaded once, written through on change.
+  // Case-insensitive throughout, so "austere" and "Austere" never split. ----
+
+  private void persistSaved() {
+    prefs.edit().putString("saved",
+        ListCodec.encode(new ArrayList<String>(savedSet))).apply();
+  }
+
+  private void persistLearned() {
+    prefs.edit().putString("learned",
+        ListCodec.encode(new ArrayList<String>(learnedSet))).apply();
+  }
+
+  private void persistHistory() {
+    prefs.edit().putString("history", ListCodec.encode(historyData)).apply();
   }
 
   private boolean isSaved(String w) {
-    return listContains(getList("saved"), w);
+    return ListCodec.containsIgnoreCase(new ArrayList<String>(savedSet), w);
   }
 
   private void setSaved(String w, boolean saved) {
-    List<String> s = getList("saved");
-    if (saved) {
-      if (!listContains(s, w)) s.add(w);
-    } else {
-      List<String> next = new ArrayList<String>();
-      for (int i = 0; i < s.size(); i++) {
-        if (!s.get(i).equals(w)) next.add(s.get(i));
-      }
-      s = next;
+    removeIgnoreCase(savedSet, w);
+    if (saved) savedSet.add(w);
+    persistSaved();
+    if (!saved) {
+      // Un-saving also clears learned, so the two states never disagree.
+      setLearned(w, false);
     }
-    setList("saved", s);
   }
 
   private boolean isLearned(String w) {
-    return listContains(getList("learned"), w);
+    return ListCodec.containsIgnoreCase(new ArrayList<String>(learnedSet), w);
   }
 
   private void setLearned(String w, boolean learned) {
-    List<String> s = getList("learned");
-    if (learned) {
-      if (!listContains(s, w)) s.add(w);
-    } else {
-      List<String> next = new ArrayList<String>();
-      for (int i = 0; i < s.size(); i++) {
-        if (!s.get(i).equals(w)) next.add(s.get(i));
-      }
-      s = next;
-    }
-    setList("learned", s);
+    removeIgnoreCase(learnedSet, w);
+    if (learned) learnedSet.add(w);
+    persistLearned();
   }
+
+  private void removeIgnoreCase(LinkedHashSet<String> set, String v) {
+    String found = null;
+    for (String s : set) {
+      if (s.equalsIgnoreCase(v)) {
+        found = s;
+        break;
+      }
+    }
+    if (found != null) set.remove(found);
+  }
+
+  private void addToHistory(String q) {
+    for (int i = historyData.size() - 1; i >= 0; i--) {
+      if (historyData.get(i).equalsIgnoreCase(q)) historyData.remove(i);
+    }
+    historyData.add(0, q);
+    while (historyData.size() > 50) historyData.remove(historyData.size() - 1);
+    persistHistory();
+  }
+
+  // ---- Translation cache: tc::<sl>|<tl>|<query>, newest first, capped. ----
+
+  private String tcKey(String sl, String tl, String query) {
+    return "tc::" + sl + "|" + tl + "|" + query;
+  }
+
+  private String getCachedTranslation(String query, String sl, String tl) {
+    return prefs.getString(tcKey(sl, tl, query), null);
+  }
+
+  private void putCachedTranslation(String query, String sl, String tl,
+      String translation) {
+    String key = tcKey(sl, tl, query);
+    List<String> order = ListCodec.decode(prefs.getString("tc_order", ""));
+    for (int i = order.size() - 1; i >= 0; i--) {
+      if (order.get(i).equals(key)) order.remove(i);
+    }
+    order.add(0, key);
+    SharedPreferences.Editor ed = prefs.edit();
+    ed.putString(key, translation);
+    while (order.size() > TC_CACHE_CAP) {
+      String old = order.remove(order.size() - 1);
+      ed.remove(old);
+    }
+    ed.putString("tc_order", ListCodec.encode(order));
+    ed.apply();
+  }
+
+  // ---- Save/Learned sync by view tag: no re-render, FA state preserved. ----
+
+  private Button findButtonByTag(ViewGroup root, String tag) {
+    for (int i = 0; i < root.getChildCount(); i++) {
+      View v = root.getChildAt(i);
+      if (tag.equals(v.getTag()) && v instanceof Button) return (Button) v;
+      if (v instanceof ViewGroup) {
+        Button found = findButtonByTag((ViewGroup) v, tag);
+        if (found != null) return found;
+      }
+    }
+    return null;
+  }
+
+  private void syncOneButton(ViewGroup root, String tag, boolean on,
+      String onText, String offText, int onBg, int offBg) {
+    Button b = findButtonByTag(root, tag);
+    if (b == null) return;
+    b.setText(on ? onText : offText);
+    b.setBackground(ripple(on ? onBg : offBg));
+  }
+
+  private void syncButtons(String key) {
+    syncOneButton(resultBox, "save:" + key, isSaved(key),
+        "Saved", "Save", GREEN, ACCENT);
+    syncOneButton(cardBox, "save:" + key, isSaved(key),
+        "Saved", "Save", GREEN, ACCENT);
+    syncOneButton(resultBox, "learn:" + key, isLearned(key),
+        "Learned", "Mark learned", GREEN, CARD2);
+    syncOneButton(cardBox, "learn:" + key, isLearned(key),
+        "Learned", "Mark learned", GREEN, CARD2);
+  }
+
+  // ---- Screens ----
 
   private void refreshRecent() {
     recentBox.removeAllViews();
-    List<String> h = getList("history");
-    if (h.size() == 0) return;
+    if (historyData.size() == 0) return;
     recentBox.addView(label("RECENT"));
-    int count = h.size() < 5 ? h.size() : 5;
+    int count = historyData.size() < 5 ? historyData.size() : 5;
     for (int i = 0; i < count; i++) {
-      final String item = h.get(i);
+      final String item = historyData.get(i);
       Button b = btn(item, CARD2);
       b.setOnClickListener(new View.OnClickListener() {
         public void onClick(View v) {
@@ -350,6 +482,21 @@ public class MainActivity extends Activity {
     input.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
     input.setInputType(InputType.TYPE_CLASS_TEXT);
     input.setSingleLine(true);
+    input.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
+    input.setOnEditorActionListener(new TextView.OnEditorActionListener() {
+      public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
+        if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+          doLookup(input.getText().toString());
+          InputMethodManager imm = (InputMethodManager)
+              getSystemService(Context.INPUT_METHOD_SERVICE);
+          if (imm != null) {
+            imm.hideSoftInputFromWindow(input.getWindowToken(), 0);
+          }
+          return true;
+        }
+        return false;
+      }
+    });
     input.setBackground(rounded(CARD, 10));
     input.setPadding(dp(14), dp(12), dp(14), dp(12));
     screen.addView(input, new LinearLayout.LayoutParams(
@@ -364,20 +511,8 @@ public class MainActivity extends Activity {
         doLookup(input.getText().toString());
       }
     });
-    dirButton = btn(faDirection ? "FA -> EN" : "EN -> FA", CARD2);
-    dirButton.setOnClickListener(new View.OnClickListener() {
-      public void onClick(View v) {
-        faDirection = !faDirection;
-        prefs.edit().putBoolean("dir", faDirection).apply();
-        dirButton.setText(faDirection ? "FA -> EN" : "EN -> FA");
-        resultBox.removeAllViews();
-      }
-    });
-    row.addView(lookupBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-    View spacer = new View(this);
-    spacer.setLayoutParams(new LinearLayout.LayoutParams(dp(8), LinearLayout.LayoutParams.WRAP_CONTENT));
-    row.addView(spacer);
-    row.addView(dirButton, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+    row.addView(lookupBtn, new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
     screen.addView(row);
 
     recentBox = new LinearLayout(this);
@@ -413,7 +548,8 @@ public class MainActivity extends Activity {
     Button clearBtn = btn("Clear history", CARD2);
     clearBtn.setOnClickListener(new View.OnClickListener() {
       public void onClick(View v) {
-        setList("history", new ArrayList<String>());
+        historyData.clear();
+        persistHistory();
         refreshHistory();
         refreshRecent();
       }
@@ -422,6 +558,117 @@ public class MainActivity extends Activity {
     return screen;
   }
 
+  private void refreshSaved() {
+    savedList.removeAllViews();
+    savedCount.setText(savedSet.size() + " saved words");
+    if (savedSet.size() == 0) {
+      savedList.addView(tv("No saved words yet. Save a word from search.", 15, SUB, false));
+      return;
+    }
+    for (String item : savedSet) {
+      final String savedItem = item;
+      String labelText = item;
+      if (isLearned(item)) labelText = labelText + " · Learned";
+      Button b = btn(labelText, CARD2);
+      b.setOnClickListener(new View.OnClickListener() {
+        public void onClick(View v) {
+          openSavedWord(savedItem);
+        }
+      });
+      savedList.addView(b);
+    }
+  }
+
+  private void openSavedWord(String item) {
+    WordsData.Word w = WordIndex.findExact(item);
+    if (w != null) {
+      showCard(w);
+      return;
+    }
+    String trans = prefs.getString("trans::" + item, "");
+    if (trans.length() > 0) {
+      showTranslationCard(item, trans);
+      return;
+    }
+    String transFa = prefs.getString("transfa::" + item, "");
+    if (transFa.length() > 0) {
+      showFaTranslationCard(item, transFa);
+      return;
+    }
+    // Nothing stored for this item: show it in search without
+    // re-running a lookup, so history is not polluted by the fallback.
+    input.setText(item);
+    navTab("search");
+  }
+
+  private void refreshHistory() {
+    historyList.removeAllViews();
+    if (historyData.size() == 0) {
+      historyList.addView(tv("No history yet.", 15, SUB, false));
+      return;
+    }
+    for (int i = 0; i < historyData.size(); i++) {
+      final String item = historyData.get(i);
+      Button b = btn(item, CARD2);
+      b.setOnClickListener(new View.OnClickListener() {
+        public void onClick(View v) {
+          input.setText(item);
+          doLookup(item);
+          navTab("search");
+        }
+      });
+      historyList.addView(b);
+    }
+  }
+
+  private void refreshSettings() {
+    settingsBox.removeAllViews();
+    final String selected = prefs.getString("provider", "");
+    for (int i = 0; i < PROVIDERS.length; i++) {
+      final String name = PROVIDERS[i];
+      LinearLayout card = card();
+      card.addView(tv(name, 16, TEXT, true));
+      LinearLayout row = new LinearLayout(this);
+      row.setOrientation(LinearLayout.HORIZONTAL);
+      row.setGravity(Gravity.CENTER_VERTICAL);
+      row.setPadding(0, dp(8), 0, dp(8));
+      final boolean isOn = prefs.getBoolean("on_" + name, false);
+      final TextView status = tv(isOn ? "On" : "Off", 14, SUB, false);
+      row.addView(status, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+      Switch sw = new Switch(this);
+      sw.setChecked(isOn);
+      sw.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+        public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+          prefs.edit().putBoolean("on_" + name, isChecked).apply();
+          status.setText(isChecked ? "On" : "Off");
+          refreshSettings();
+        }
+      });
+      row.addView(sw);
+      card.addView(row);
+      boolean isSelected = selected.equals(name);
+      Button useBtn = btn(isSelected ? "Selected for answers" : "Use for answers",
+          isSelected ? GREEN : CARD2);
+      // A provider whose switch is off cannot be picked for answers.
+      useBtn.setEnabled(isOn);
+      if (!isOn) useBtn.setAlpha(0.5f);
+      useBtn.setOnClickListener(new View.OnClickListener() {
+        public void onClick(View v) {
+          if (!prefs.getBoolean("on_" + name, false)) return;
+          prefs.edit().putString("provider", name).apply();
+          refreshSettings();
+        }
+      });
+      card.addView(useBtn);
+      settingsBox.addView(card);
+    }
+    settingsBox.addView(tv("Search AI by SobhaN", 14, SUB, false));
+    settingsBox.addView(tv("Version 2", 14, SUB, false));
+    settingsBox.addView(tv("Saved words and history stay on this phone.", 14, SUB, false));
+  }
+
+  // ---- Lookup: direction comes from the query script, never a toggle. ----
+
   private void doLookup(String raw) {
     String q = raw == null ? "" : raw.replace("\n", " ").trim();
     if (q.length() == 0) {
@@ -429,33 +676,97 @@ public class MainActivity extends Activity {
       resultBox.addView(tv("Type a word first.", 15, SUB, false));
       return;
     }
-    addToHistory(q);
-    refreshRecent();
     lookupId++;
     final int myId = lookupId;
-    if (!faDirection) {
-      WordsData.Word w = WordsData.findExact(q);
-      if (w != null) {
-        lastWord = w;
-        lastQuery = w.word;
-        lastTranslation = null;
-        lastKind = "word";
+    if (WordIndex.isPersian(q)) {
+      // Persian input: bundled reverse index first, then cache, then net.
+      List<WordsData.Word> hits = WordIndex.findByFa(q, 8);
+      if (hits.size() == 1) {
+        WordsData.Word w = hits.get(0);
+        addToHistory(w.word);
+        refreshRecent();
         resultBox.removeAllViews();
         renderWordInto(resultBox, w, false);
         return;
       }
+      if (hits.size() > 1) {
+        addToHistory(q);
+        refreshRecent();
+        resultBox.removeAllViews();
+        resultBox.addView(label("DID YOU MEAN?"));
+        for (int i = 0; i < hits.size(); i++) {
+          final WordsData.Word hw = hits.get(i);
+          Button b = btn(hw.word, CARD2);
+          b.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+              input.setText(hw.word);
+              doLookup(hw.word);
+            }
+          });
+          resultBox.addView(b);
+        }
+        return;
+      }
+      String cached = getCachedTranslation(q, "fa", "en");
+      if (cached != null) {
+        addToHistory(q);
+        refreshRecent();
+        resultBox.removeAllViews();
+        renderFaTranslationInto(resultBox, q, cached, false);
+        return;
+      }
+      addToHistory(q);
+      refreshRecent();
+      resultBox.removeAllViews();
+      final TextView waiting = tv("Translating…", 15, SUB, false);
+      resultBox.addView(waiting);
+      final String fq = q;
+      fetchTranslation(q, "fa", "en", new TranslationCallback() {
+        public void onResult(GtxParser.Result r) {
+          if (myId != lookupId) return;
+          resultBox.removeView(waiting);
+          if (r.status == GtxParser.OK) {
+            putCachedTranslation(fq, "fa", "en", r.translation);
+            renderFaTranslationInto(resultBox, fq, r.translation, false);
+          } else if (r.status == GtxParser.HTTP_ERROR) {
+            resultBox.addView(tv("Translation service unavailable, try again later.", 15, SUB, false));
+          } else {
+            resultBox.addView(tv("Needs internet for this word.", 15, SUB, false));
+          }
+        }
+      });
+    } else {
+      // English input: exact match, then cache, then similar + network.
+      WordsData.Word w = WordIndex.findExact(q);
+      if (w != null) {
+        addToHistory(w.word);
+        refreshRecent();
+        resultBox.removeAllViews();
+        renderWordInto(resultBox, w, false);
+        return;
+      }
+      String cached = getCachedTranslation(q, "auto", "fa");
+      if (cached != null) {
+        addToHistory(q);
+        refreshRecent();
+        resultBox.removeAllViews();
+        renderTranslationInto(resultBox, q, cached, false);
+        return;
+      }
+      addToHistory(q);
+      refreshRecent();
       resultBox.removeAllViews();
       resultBox.addView(tv("No offline entry for \"" + q + "\".", 15, SUB, false));
-      List<WordsData.Word> sims = WordsData.findSimilar(q, 8);
+      List<WordsData.Word> sims = WordIndex.findSimilar(q, 8);
       if (sims.size() > 0) {
         resultBox.addView(label("SIMILAR WORDS"));
         for (int i = 0; i < sims.size(); i++) {
-          final String sw = sims.get(i).word;
-          Button b = btn(sw, CARD2);
+          final WordsData.Word sw = sims.get(i);
+          Button b = btn(sw.word, CARD2);
           b.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
-              input.setText(sw);
-              doLookup(sw);
+              input.setText(sw.word);
+              doLookup(sw.word);
             }
           });
           resultBox.addView(b);
@@ -465,41 +776,16 @@ public class MainActivity extends Activity {
       resultBox.addView(waiting);
       final String fq = q;
       fetchTranslation(q, "auto", "fa", new TranslationCallback() {
-        public void onResult(String translation) {
+        public void onResult(GtxParser.Result r) {
           if (myId != lookupId) return;
           resultBox.removeView(waiting);
-          if (translation == null) {
-            resultBox.addView(tv("Needs internet for this word.", 15, SUB, false));
+          if (r.status == GtxParser.OK) {
+            putCachedTranslation(fq, "auto", "fa", r.translation);
+            renderTranslationInto(resultBox, fq, r.translation, false);
+          } else if (r.status == GtxParser.HTTP_ERROR) {
+            resultBox.addView(tv("Translation service unavailable, try again later.", 15, SUB, false));
           } else {
-            lastQuery = fq;
-            lastTranslation = translation;
-            lastWord = null;
-            lastKind = "translation";
-            renderTranslationInto(resultBox, fq, translation, false);
-          }
-        }
-      });
-    } else {
-      resultBox.removeAllViews();
-      final TextView waiting = tv("Translating…", 15, SUB, false);
-      resultBox.addView(waiting);
-      final String fq = q;
-      fetchTranslation(q, "fa", "en", new TranslationCallback() {
-        public void onResult(String translation) {
-          if (myId != lookupId) return;
-          resultBox.removeView(waiting);
-          if (translation == null) {
             resultBox.addView(tv("Needs internet for this word.", 15, SUB, false));
-          } else {
-            lastQuery = fq;
-            lastTranslation = translation;
-            lastWord = null;
-            lastKind = "translation-fa";
-            LinearLayout card = card();
-            card.addView(tv(fq, 20, TEXT, true));
-            card.addView(label("ENGLISH"));
-            card.addView(tv(translation, 16, TEXT, false));
-            resultBox.addView(card);
           }
         }
       });
@@ -510,82 +796,85 @@ public class MainActivity extends Activity {
       final TranslationCallback cb) {
     new Thread(new Runnable() {
       public void run() {
-        try {
-          String enc = URLEncoder.encode(q, "UTF-8");
-          String urlStr = "https://translate.googleapis.com/translate_a/single?client=gtx&sl="
-              + sl + "&tl=" + tl + "&dt=t&q=" + enc;
-          URL url = new URL(urlStr);
-          HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-          conn.setConnectTimeout(8000);
-          conn.setReadTimeout(8000);
-          conn.setRequestProperty("User-Agent", "SearchAI/1.0");
-          BufferedReader r = new BufferedReader(new InputStreamReader(conn.getInputStream(), "UTF-8"));
-          StringBuilder sb = new StringBuilder();
-          String line;
-          while ((line = r.readLine()) != null) sb.append(line);
-          r.close();
-          final String result = parseGtx(sb.toString());
-          runOnUiThread(new Runnable() {
-            public void run() {
-              cb.onResult(result);
-            }
-          });
-        } catch (Exception e) {
-          runOnUiThread(new Runnable() {
-            public void run() {
-              cb.onResult(null);
-            }
-          });
-        }
+        final GtxParser.Result r = fetchTranslationSync(q, sl, tl);
+        runOnUiThread(new Runnable() {
+          public void run() {
+            cb.onResult(r);
+          }
+        });
       }
     }).start();
   }
 
-  private String parseGtx(String resp) {
-    if (resp == null) return null;
-    String marker = "[[[\"";
-    int start = resp.indexOf(marker);
-    if (start < 0) return null;
-    int i = start + marker.length();
-    StringBuilder sb = new StringBuilder();
-    while (i < resp.length()) {
-      char c = resp.charAt(i);
-      if (c == '\\' && i + 1 < resp.length()) {
-        char n = resp.charAt(i + 1);
-        if (n == '"') {
-          sb.append('"');
-          i += 2;
-          continue;
-        }
-        if (n == '\\') {
-          sb.append('\\');
-          i += 2;
-          continue;
-        }
-        if (n == 'n') {
-          sb.append(' ');
-          i += 2;
-          continue;
-        }
-        if (n == 'u' && i + 5 < resp.length()) {
-          try {
-            int code = Integer.parseInt(resp.substring(i + 2, i + 6), 16);
-            sb.append((char) code);
-          } catch (Exception e) {
-          }
-          i += 6;
-          continue;
-        }
-        i += 2;
-        continue;
+  private GtxParser.Result fetchTranslationSync(String q, String sl, String tl) {
+    String query = q;
+    if (query.length() > QUERY_CAP) query = query.substring(0, QUERY_CAP);
+    HttpURLConnection conn = null;
+    BufferedReader reader = null;
+    try {
+      String enc = URLEncoder.encode(query, "UTF-8");
+      String urlStr = "https://translate.googleapis.com/translate_a/single?client=gtx&sl="
+          + sl + "&tl=" + tl + "&dt=t&q=" + enc;
+      URL url = new URL(urlStr);
+      conn = (HttpURLConnection) url.openConnection();
+      conn.setConnectTimeout(8000);
+      conn.setReadTimeout(8000);
+      conn.setRequestProperty("User-Agent", "SearchAI/2.0");
+      int code = conn.getResponseCode();
+      if (code != 200) {
+        return new GtxParser.Result(GtxParser.HTTP_ERROR, null);
       }
-      if (c == '"') break;
-      sb.append(c);
-      i++;
+      reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), "UTF-8"));
+      StringBuilder sb = new StringBuilder();
+      String line;
+      while ((line = reader.readLine()) != null) sb.append(line);
+      GtxParser.Result r = GtxParser.parseGtx(sb.toString(), query);
+      if (r.status == GtxParser.OK) return r;
+    } catch (Exception e) {
+      // Fall through to the MyMemory fallback below.
+    } finally {
+      try {
+        if (reader != null) reader.close();
+      } catch (Exception ignored) {
+      }
+      if (conn != null) conn.disconnect();
     }
-    String out = sb.toString().trim();
-    return out.length() == 0 ? null : out;
+    // MyMemory fallback (keyless). It needs real language codes, so
+    // "auto" becomes "en" here; the English path is English by script.
+    HttpURLConnection conn2 = null;
+    BufferedReader reader2 = null;
+    try {
+      String mmSl = sl.equals("auto") ? "en" : sl;
+      String enc = URLEncoder.encode(query, "UTF-8");
+      String urlStr = "https://api.mymemory.translated.net/get?q=" + enc
+          + "&langpair=" + mmSl + "|" + tl;
+      URL url = new URL(urlStr);
+      conn2 = (HttpURLConnection) url.openConnection();
+      conn2.setConnectTimeout(8000);
+      conn2.setReadTimeout(8000);
+      int code = conn2.getResponseCode();
+      if (code != 200) {
+        return new GtxParser.Result(GtxParser.HTTP_ERROR, null);
+      }
+      reader2 = new BufferedReader(new InputStreamReader(conn2.getInputStream(), "UTF-8"));
+      StringBuilder sb = new StringBuilder();
+      String line;
+      while ((line = reader2.readLine()) != null) sb.append(line);
+      String t = GtxParser.parseMyMemory(sb.toString(), query);
+      if (t != null) return new GtxParser.Result(GtxParser.OK, t);
+      return new GtxParser.Result(GtxParser.EMPTY, null);
+    } catch (Exception e) {
+      return new GtxParser.Result(GtxParser.OFFLINE, null);
+    } finally {
+      try {
+        if (reader2 != null) reader2.close();
+      } catch (Exception ignored) {
+      }
+      if (conn2 != null) conn2.disconnect();
+    }
   }
+
+  // ---- Card rendering: Save/Learned sync by tag, never by re-render. ----
 
   private void renderWordInto(LinearLayout parent, final WordsData.Word w, boolean isCard) {
     LinearLayout card = card();
@@ -620,12 +909,12 @@ public class MainActivity extends Activity {
     row.setOrientation(LinearLayout.HORIZONTAL);
     row.setPadding(0, dp(12), 0, 0);
     final Button saveBtn = btn(isSaved(w.word) ? "Saved" : "Save", isSaved(w.word) ? GREEN : ACCENT);
+    saveBtn.setTag("save:" + w.word);
     saveBtn.setOnClickListener(new View.OnClickListener() {
       public void onClick(View v) {
         boolean nowSaved = !isSaved(w.word);
         setSaved(w.word, nowSaved);
-        saveBtn.setText(nowSaved ? "Saved" : "Save");
-        saveBtn.setBackground(rounded(nowSaved ? GREEN : ACCENT, 10));
+        syncButtons(w.word);
       }
     });
     row.addView(saveBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
@@ -636,7 +925,7 @@ public class MainActivity extends Activity {
       Button showBtn = btn("Show card", CARD2);
       showBtn.setOnClickListener(new View.OnClickListener() {
         public void onClick(View v) {
-          showCard(w, "result");
+          showCard(w);
         }
       });
       row.addView(showBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
@@ -644,13 +933,12 @@ public class MainActivity extends Activity {
     card.addView(row);
     final Button learnBtn = btn(isLearned(w.word) ? "Learned" : "Mark learned",
         isLearned(w.word) ? GREEN : CARD2);
-    learnBtn.setPadding(dp(14), dp(10), dp(14), dp(10));
+    learnBtn.setTag("learn:" + w.word);
     learnBtn.setOnClickListener(new View.OnClickListener() {
       public void onClick(View v) {
         boolean nowLearned = !isLearned(w.word);
         setLearned(w.word, nowLearned);
-        learnBtn.setText(nowLearned ? "Learned" : "Mark learned");
-        learnBtn.setBackground(rounded(nowLearned ? GREEN : CARD2, 10));
+        syncButtons(w.word);
       }
     });
     LinearLayout.LayoutParams learnParams = new LinearLayout.LayoutParams(
@@ -671,6 +959,7 @@ public class MainActivity extends Activity {
     row.setOrientation(LinearLayout.HORIZONTAL);
     row.setPadding(0, dp(12), 0, 0);
     final Button saveBtn = btn(isSaved(query) ? "Saved" : "Save", isSaved(query) ? GREEN : ACCENT);
+    saveBtn.setTag("save:" + query);
     saveBtn.setOnClickListener(new View.OnClickListener() {
       public void onClick(View v) {
         boolean nowSaved = !isSaved(query);
@@ -680,8 +969,7 @@ public class MainActivity extends Activity {
         } else {
           prefs.edit().remove("trans::" + query).apply();
         }
-        saveBtn.setText(nowSaved ? "Saved" : "Save");
-        saveBtn.setBackground(rounded(nowSaved ? GREEN : ACCENT, 10));
+        syncButtons(query);
       }
     });
     row.addView(saveBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
@@ -692,7 +980,7 @@ public class MainActivity extends Activity {
       Button showBtn = btn("Show card", CARD2);
       showBtn.setOnClickListener(new View.OnClickListener() {
         public void onClick(View v) {
-          showTranslationCard(query, translation, "result");
+          showTranslationCard(query, translation);
         }
       });
       row.addView(showBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
@@ -701,144 +989,43 @@ public class MainActivity extends Activity {
     parent.addView(card);
   }
 
-  private void refreshSaved() {
-    savedList.removeAllViews();
-    List<String> saved = getList("saved");
-    savedCount.setText(saved.size() + " saved words");
-    if (saved.size() == 0) {
-      savedList.addView(tv("No saved words yet. Save a word from search.", 15, SUB, false));
-      return;
-    }
-    for (int i = 0; i < saved.size(); i++) {
-      final String item = saved.get(i);
-      String labelText = item;
-      if (isLearned(item)) labelText = labelText + " · Learned";
-      Button b = btn(labelText, CARD2);
-      b.setOnClickListener(new View.OnClickListener() {
-        public void onClick(View v) {
-          openSavedWord(item);
-        }
-      });
-      savedList.addView(b);
-    }
-  }
-
-  private void openSavedWord(String item) {
-    WordsData.Word w = WordsData.findExact(item);
-    if (w != null) {
-      showCard(w, "saved");
-      return;
-    }
-    String trans = prefs.getString("trans::" + item, "");
-    if (trans.length() > 0) {
-      showTranslationCard(item, trans, "saved");
-      return;
-    }
-    input.setText(item);
-    doLookup(item);
-    showScreen("search");
-  }
-
-  private void refreshHistory() {
-    historyList.removeAllViews();
-    List<String> h = getList("history");
-    if (h.size() == 0) {
-      historyList.addView(tv("No history yet.", 15, SUB, false));
-      return;
-    }
-    for (int i = 0; i < h.size(); i++) {
-      final String item = h.get(i);
-      Button b = btn(item, CARD2);
-      b.setOnClickListener(new View.OnClickListener() {
-        public void onClick(View v) {
-          input.setText(item);
-          doLookup(item);
-          showScreen("search");
-        }
-      });
-      historyList.addView(b);
-    }
-  }
-
-  private void refreshSettings() {
-    settingsBox.removeAllViews();
-    final String selected = prefs.getString("provider", "");
-    for (int i = 0; i < PROVIDERS.length; i++) {
-      final String name = PROVIDERS[i];
-      LinearLayout card = card();
-      card.addView(tv(name, 16, TEXT, true));
-      LinearLayout row = new LinearLayout(this);
-      row.setOrientation(LinearLayout.HORIZONTAL);
-      row.setGravity(Gravity.CENTER_VERTICAL);
-      row.setPadding(0, dp(8), 0, dp(8));
-      final TextView status = tv(prefs.getBoolean("on_" + name, false) ? "On" : "Off", 14, SUB, false);
-      row.addView(status, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-      Switch sw = new Switch(this);
-      sw.setChecked(prefs.getBoolean("on_" + name, false));
-      sw.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-        public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-          prefs.edit().putBoolean("on_" + name, isChecked).apply();
-          status.setText(isChecked ? "On" : "Off");
-        }
-      });
-      row.addView(sw);
-      card.addView(row);
-      boolean isSelected = selected.equals(name);
-      Button useBtn = btn(isSelected ? "Selected for answers" : "Use for answers",
-          isSelected ? GREEN : CARD2);
-      useBtn.setOnClickListener(new View.OnClickListener() {
-        public void onClick(View v) {
-          prefs.edit().putString("provider", name).apply();
-          refreshSettings();
-        }
-      });
-      card.addView(useBtn);
-      settingsBox.addView(card);
-    }
-    settingsBox.addView(tv("Search AI by SobhaN", 14, SUB, false));
-    settingsBox.addView(tv("Version 1", 14, SUB, false));
-    settingsBox.addView(tv("Saved words and history stay on this phone.", 14, SUB, false));
-  }
-
-  private Button backButton() {
-    Button back = btn("Back", CARD2);
-    back.setOnClickListener(new View.OnClickListener() {
+  private void renderFaTranslationInto(LinearLayout parent, final String query,
+      final String translation, boolean isCard) {
+    LinearLayout card = card();
+    card.addView(tv(query, 20, TEXT, true));
+    card.addView(label("ENGLISH"));
+    card.addView(tv(translation, 16, TEXT, false));
+    LinearLayout row = new LinearLayout(this);
+    row.setOrientation(LinearLayout.HORIZONTAL);
+    row.setPadding(0, dp(12), 0, 0);
+    final Button saveBtn = btn(isSaved(query) ? "Saved" : "Save", isSaved(query) ? GREEN : ACCENT);
+    saveBtn.setTag("save:" + query);
+    saveBtn.setOnClickListener(new View.OnClickListener() {
       public void onClick(View v) {
-        if (cardSource.equals("saved")) {
-          showScreen("saved");
-          return;
+        boolean nowSaved = !isSaved(query);
+        setSaved(query, nowSaved);
+        if (nowSaved) {
+          prefs.edit().putString("transfa::" + query, translation).apply();
+        } else {
+          prefs.edit().remove("transfa::" + query).apply();
         }
-        if (lastKind.equals("word") && lastWord != null) {
-          resultBox.removeAllViews();
-          renderWordInto(resultBox, lastWord, false);
-          showScreen("search");
-          return;
-        }
-        if (lastKind.equals("translation") && lastQuery != null && lastTranslation != null) {
-          resultBox.removeAllViews();
-          renderTranslationInto(resultBox, lastQuery, lastTranslation, false);
-          showScreen("search");
-          return;
-        }
-        showScreen("search");
+        syncButtons(query);
       }
     });
-    return back;
-  }
-
-  private void showCard(WordsData.Word w, String source) {
-    cardSource = source;
-    cardBox.removeAllViews();
-    cardBox.addView(backButton());
-    renderWordInto(cardBox, w, true);
-    showScreen("card");
-  }
-
-  private void showTranslationCard(String query, String translation, String source) {
-    cardSource = source;
-    cardBox.removeAllViews();
-    cardBox.addView(backButton());
-    renderTranslationInto(cardBox, query, translation, true);
-    showScreen("card");
+    row.addView(saveBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+    if (!isCard) {
+      View spacer = new View(this);
+      spacer.setLayoutParams(new LinearLayout.LayoutParams(dp(8), LinearLayout.LayoutParams.WRAP_CONTENT));
+      row.addView(spacer);
+      Button showBtn = btn("Show card", CARD2);
+      showBtn.setOnClickListener(new View.OnClickListener() {
+        public void onClick(View v) {
+          showFaTranslationCard(query, translation);
+        }
+      });
+      row.addView(showBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+    }
+    card.addView(row);
+    parent.addView(card);
   }
 }
