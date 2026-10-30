@@ -21,7 +21,13 @@ import org.json.JSONObject;
     example "rebel" arrives as a noun entry plus a verb entry). v3
     read only the first entry, which dropped the verb meaning and
     its synonyms ("defy") and antonyms ("obey", "submit"). v4 merges
-    every entry, and each definition keeps its own part of speech. */
+    every entry, and each definition keeps its own part of speech.
+
+    v6 cache version: entries cached before v6 carry no version and
+    may hold only the first entry (the v3 noun-only shape for rebel).
+    toJson stamps version 2 and fromJson rejects anything else, so a
+    stale cache is never served as if it were complete: the lookup
+    falls through to a fresh network fetch instead. */
 public class DictParser {
 
   public static class Def {
@@ -140,10 +146,13 @@ public class DictParser {
     }
   }
 
-  /** Serialize an entry for the local cache (dict::<word>). */
+  /** Serialize an entry for the local cache (dict::<word>).
+      Stamped with the v6 cache version so older, possibly
+      first-entry-only caches are rejected on read. */
   public static String toJson(DictEntry e) {
     try {
       JSONObject o = new JSONObject();
+      o.put("v", 2);
       o.put("word", e.word);
       o.put("phonetic", e.phonetic);
       o.put("pos", e.pos);
@@ -168,11 +177,14 @@ public class DictParser {
     }
   }
 
-  /** Restore a cached entry, or null when the stored text is unusable. */
+  /** Restore a cached entry, or null when the stored text is unusable
+      or was cached before the v6 version stamp (stale, possibly
+      first-entry-only: the caller re-fetches instead of serving it). */
   public static DictEntry fromJson(String json) {
     if (json == null) return null;
     try {
       JSONObject o = new JSONObject(json);
+      if (o.optInt("v", 0) != 2) return null;
       String word = o.optString("word", "").trim();
       if (word.length() == 0) return null;
       String entryPos = o.optString("pos", "");

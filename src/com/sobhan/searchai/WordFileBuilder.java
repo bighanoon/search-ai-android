@@ -136,6 +136,27 @@ public class WordFileBuilder {
     return sb.toString();
   }
 
+  /** Builds the bulk file content: one JSON object holding one entry
+      per saved word, in the order given. Each entry is built exactly
+      like a per-word file; the bulk file adds no new fields and
+      embeds no picture. */
+  public static String buildBulkJson(List<Entry> entries) {
+    StringBuilder sb = new StringBuilder();
+    sb.append("{\n  \"words\": [");
+    for (int i = 0; i < entries.size(); i++) {
+      if (i > 0) sb.append(",");
+      sb.append("\n");
+      String one = buildJson(entries.get(i)).trim();
+      String[] lines = one.split("\n");
+      for (int j = 0; j < lines.length; j++) {
+        sb.append("    ").append(lines[j]);
+        if (j < lines.length - 1) sb.append("\n");
+      }
+    }
+    sb.append("\n  ]\n}\n");
+    return sb.toString();
+  }
+
   private static boolean field(StringBuilder sb, boolean first,
       String key, String value) {
     if (value == null || value.length() == 0) return first;

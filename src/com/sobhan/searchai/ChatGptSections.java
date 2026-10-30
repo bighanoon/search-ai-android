@@ -21,6 +21,10 @@ public class ChatGptSections {
     public String background;
     public String hook;
     public String answer;
+    // v7 How Common: label plus 1-7 level, both optional. A level
+    // outside 1-7 parses to -1, which means "omit the meter".
+    public String frequencyLabel;
+    public int frequencyLevel = -1;
   }
 
   public static Sections parse(String json) {
@@ -32,6 +36,8 @@ public class ChatGptSections {
       s.background = optText(obj, "background");
       s.hook = optText(obj, "hook");
       s.answer = optText(obj, "answer");
+      s.frequencyLabel = optText(obj, "frequencyLabel");
+      s.frequencyLevel = optLevel(obj, "frequencyLevel");
       return s;
     } catch (Exception e) {
       return null;
@@ -46,6 +52,21 @@ public class ChatGptSections {
       return t.length() == 0 ? null : t;
     } catch (Exception e) {
       return null;
+    }
+  }
+
+  /** Integer field clamped to the 1-7 frequency scale; anything
+      missing, non-numeric, or out of range parses to -1. */
+  private static int optLevel(JSONObject obj, String key) {
+    try {
+      Object v = obj.opt(key);
+      if (v instanceof Number) {
+        int n = ((Number) v).intValue();
+        return (n >= 1 && n <= 7) ? n : -1;
+      }
+      return -1;
+    } catch (Exception e) {
+      return -1;
     }
   }
 

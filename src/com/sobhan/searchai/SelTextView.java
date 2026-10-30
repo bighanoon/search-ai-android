@@ -1,6 +1,9 @@
 package com.sobhan.searchai;
 
 import android.content.Context;
+import android.view.ActionMode;
+import android.view.Menu;
+import android.view.MenuInflater;
 import android.widget.TextView;
 
 /** A TextView whose text the user can select, reporting each new
@@ -22,6 +25,26 @@ public class SelTextView extends TextView {
 
   public SelTextView(Context context) {
     super(context);
+    // v6: suppress the Android system selection toolbar (Copy,
+    // Translate, Select all, Share bar at the top). The app's own
+    // bottom popup already covers Copy and translation, so nothing
+    // is lost. Returning false from onCreateActionMode keeps the
+    // system bar from appearing while selection itself, and the
+    // onSelectionChanged reports this class relies on, keep working.
+    setCustomSelectionActionModeCallback(new ActionMode.Callback() {
+      public boolean onCreateActionMode(ActionMode mode, Menu menu) {
+        return false;
+      }
+      public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
+        return false;
+      }
+      public boolean onActionItemClicked(ActionMode mode,
+          android.view.MenuItem item) {
+        return false;
+      }
+      public void onDestroyActionMode(ActionMode mode) {
+      }
+    });
   }
 
   public void setSelectionListener(Listener listener) {

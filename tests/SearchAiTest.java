@@ -612,4 +612,356 @@ public class SearchAiTest {
     assertFalse(o.has("cefr"));
     assertFalse(o.has("phonetic"));
   }
+
+  // ---- v6: stale-cache invalidation, pictures, bulk file ----
+
+  @Test
+  public void dictCacheVersionRejectsOld() {
+    // A pre-v6 cache (no version stamp, noun-only shape like the v3
+    // rebel cache) must be rejected so the lookup re-fetches.
+    String oldJson = "{\"word\":\"rebel\",\"phonetic\":\"\",\"pos\":\"noun\","
+        + "\"defs\":[{\"d\":\"A person who resists an established authority, often violently\",\"e\":\"\",\"p\":\"noun\"}],"
+        + "\"syn\":[],\"ant\":[]}";
+    assertNull(DictParser.fromJson(oldJson));
+    // A v6 cache round-trips the full merged entry.
+    DictParser.DictEntry e = DictParser.parse(REBEL_JSON);
+    assertNotNull(e);
+    DictParser.DictEntry back = DictParser.fromJson(DictParser.toJson(e));
+    assertNotNull(back);
+    assertEquals(3, back.defs.size());
+    assertEquals("verb", back.defs.get(2).pos);
+    assertTrue(back.synonyms.contains("defy"));
+    assertTrue(back.antonyms.contains("obey"));
+    assertTrue(back.antonyms.contains("submit"));
+  }
+
+  @Test
+  public void pictureNames() {
+    assertEquals("a_piece_of_cake", PictureNames.stem("A piece of cake"));
+    assertEquals("pic_a_piece_of_cake",
+        PictureNames.drawableName("A piece of cake"));
+    assertEquals("a_piece_of_cake.webp",
+        PictureNames.fileName("A piece of cake"));
+    assertEquals("yelling", PictureNames.stem("yelling"));
+    assertEquals("pic_yelling", PictureNames.drawableName("yelling"));
+    assertEquals("rebel", PictureNames.stem("Rebel"));
+    assertEquals("", PictureNames.stem("   "));
+    assertEquals("", PictureNames.drawableName(null));
+  }
+
+  @Test
+  public void sceneTexts() {
+    assertNotNull(SceneTexts.forWord("austere"));
+    assertNotNull(SceneTexts.forWord("Austere"));
+    // Tightened under the closest-scene rule: candid is no longer
+    // the singer interview, bolster is no longer a growing argument.
+    assertTrue(SceneTexts.forWord("candid").indexOf("face to face") >= 0);
+    assertTrue(SceneTexts.forWord("bolster").indexOf("lawyer") >= 0);
+    assertNotNull(SceneTexts.forWord("rebel"));
+    assertNotNull(SceneTexts.forWord("outlaw"));
+    // Yelling's scene lives in VerifiedEntries, not here.
+    assertNull(SceneTexts.forWord("yelling"));
+    assertNull(SceneTexts.forWord("nonexistentword"));
+    assertNull(SceneTexts.forWord(null));
+  }
+
+  @Test
+  public void updatesManifestParse() throws Exception {
+    String json = "{\"pictures\":[{\"word\":\"yelling\",\"file\":\"yelling.webp\",\"version\":1},"
+        + "{\"word\":\"rebel\",\"file\":\"rebel.webp\",\"version\":2},"
+        + "{\"word\":\"bad\",\"file\":\"bad.webp\"},"
+        + "{\"word\":\"evil\",\"file\":\"../evil.webp\",\"version\":1}]}";
+    List<UpdatesManifest.Picture> pics = UpdatesManifest.parse(json);
+    assertEquals(2, pics.size());
+    assertEquals("yelling", pics.get(0).word);
+    assertEquals("yelling.webp", pics.get(0).file);
+    assertEquals(1, pics.get(0).version);
+    assertEquals(2, pics.get(1).version);
+    assertTrue(UpdatesManifest.parse("not json").isEmpty());
+    assertTrue(UpdatesManifest.parse(null).isEmpty());
+  }
+
+  @Test
+  public void bulkFileJson() throws Exception {
+    WordFileBuilder.Entry a = new WordFileBuilder.Entry();
+    a.word = "rebel";
+    a.definitions.add(new WordFileBuilder.Def("verb",
+        "To resist or become defiant toward an authority.", ""));
+    a.synonyms.add("defy");
+    a.antonyms.add("obey");
+    WordFileBuilder.Entry b = new WordFileBuilder.Entry();
+    b.word = "outlaw";
+    b.persian = "test-persian";
+    b.note = "Full entry not available.";
+    List<WordFileBuilder.Entry> entries = new ArrayList<WordFileBuilder.Entry>();
+    entries.add(a);
+    entries.add(b);
+    String json = WordFileBuilder.buildBulkJson(entries);
+    org.json.JSONObject o = new org.json.JSONObject(json);
+    org.json.JSONArray words = o.getJSONArray("words");
+    assertEquals(2, words.length());
+    assertEquals("rebel", words.getJSONObject(0).getString("word"));
+    assertEquals("defy",
+        words.getJSONObject(0).getJSONArray("synonyms").getString(0));
+    assertEquals("outlaw", words.getJSONObject(1).getString("word"));
+    assertFalse(words.getJSONObject(1).has("definitions"));
+    assertFalse(json.contains("picture"));
+  }
+
+  // ---- v7: DetailContent ----
+
+  @Test
+  public void boldRangesCaseInsensitive() {
+    List<DetailContent.Range> rs =
+        DetailContent.boldRanges("A lone wolf howled at the night.", "night");
+    assertEquals(1, rs.size());
+    assertEquals(26, rs.get(0).start);
+    assertEquals(31, rs.get(0).end);
+    // Multi-word phrase matches as one phrase.
+    List<DetailContent.Range> ph =
+        DetailContent.boldRanges("Call it a day, call it a day.", "call it a day");
+    assertEquals(2, ph.size());
+    // No match, blank word, and null input all mean "no bolding".
+    assertTrue(DetailContent.boldRanges("hello", "night").isEmpty());
+    assertTrue(DetailContent.boldRanges("hello", "  ").isEmpty());
+    assertTrue(DetailContent.boldRanges(null, "night").isEmpty());
+  }
+
+  @Test
+  public void collectExamplesDedupes() {
+    List<String> raw = new ArrayList<String>();
+    raw.add("He yelled.");
+    raw.add("He yelled.");
+    raw.add("");
+    raw.add(null);
+    raw.add("She stayed up late.");
+    List<String> out = DetailContent.collectExamples(raw);
+    assertEquals(2, out.size());
+    assertEquals("He yelled.", out.get(0));
+    assertEquals("She stayed up late.", out.get(1));
+  }
+
+  @Test
+  public void relatedWordsDedupesAndCaps() {
+    List<String> syn = new ArrayList<String>();
+    syn.add("darkness");
+    syn.add("evening");
+    List<String> sim = new ArrayList<String>();
+    sim.add("Evening");
+    sim.add("midnight");
+    sim.add("dusk");
+    List<String> out = DetailContent.relatedWords(syn, sim);
+    assertEquals(4, out.size());
+    assertEquals("darkness", out.get(0));
+    assertEquals("evening", out.get(1));
+    assertEquals("midnight", out.get(2));
+    assertEquals("dusk", out.get(3));
+  }
+
+  @Test
+  public void showMoreSplit() {
+    List<String> all = new ArrayList<String>();
+    all.add("a");
+    all.add("b");
+    all.add("c");
+    all.add("d");
+    all.add("e");
+    assertEquals(3, DetailContent.firstExamples(all).size());
+    assertEquals(2, DetailContent.restExamples(all).size());
+    assertEquals("d", DetailContent.restExamples(all).get(0));
+    List<String> two = new ArrayList<String>();
+    two.add("a");
+    two.add("b");
+    assertEquals(2, DetailContent.firstExamples(two).size());
+    assertTrue(DetailContent.restExamples(two).isEmpty());
+    assertTrue(DetailContent.firstExamples(null).isEmpty());
+  }
+
+  @Test
+  public void frequencyScale() {
+    assertEquals(5, DetailContent.frequencyLevelForLabel("Common"));
+    assertEquals(1, DetailContent.frequencyLevelForLabel("very rare"));
+    assertEquals(7, DetailContent.frequencyLevelForLabel("Extremely common"));
+    assertEquals(-1, DetailContent.frequencyLevelForLabel("sometimes"));
+    assertEquals(-1, DetailContent.frequencyLevelForLabel(null));
+    assertEquals("Common", DetailContent.frequencyLabelForLevel(5));
+    assertEquals(null, DetailContent.frequencyLabelForLevel(0));
+    assertEquals(null, DetailContent.frequencyLabelForLevel(8));
+    assertTrue(DetailContent.validFrequencyLevel(1));
+    assertTrue(DetailContent.validFrequencyLevel(7));
+    assertFalse(DetailContent.validFrequencyLevel(0));
+    assertFalse(DetailContent.validFrequencyLevel(8));
+  }
+
+  // ---- v7: ChatGptSections frequency fields ----
+
+  @Test
+  public void chatGptFrequencyParses() throws Exception {
+    String json = "{\"overview\":\"o\",\"frequencyLabel\":\"Common\","
+        + "\"frequencyLevel\":5}";
+    ChatGptSections.Sections s = ChatGptSections.parse(json);
+    assertEquals("Common", s.frequencyLabel);
+    assertEquals(5, s.frequencyLevel);
+    // Out-of-range level parses to -1 (omit the meter), label kept.
+    String bad = "{\"frequencyLabel\":\"Common\",\"frequencyLevel\":9}";
+    ChatGptSections.Sections s2 = ChatGptSections.parse(bad);
+    assertEquals(-1, s2.frequencyLevel);
+    assertEquals("Common", s2.frequencyLabel);
+    // Missing frequency fields stay absent, never invented.
+    ChatGptSections.Sections s3 =
+        ChatGptSections.parse("{\"overview\":\"o\"}");
+    assertEquals(null, s3.frequencyLabel);
+    assertEquals(-1, s3.frequencyLevel);
+    // Unparseable JSON still returns null (dictionary fallback).
+    assertEquals(null, ChatGptSections.parse("not json"));
+  }
+
+  // ---- v8: My Words / Try a word sections on the result page ----
+
+  @Test
+  public void v8HomePageShowsSections() {
+    // No result shown (empty result box): home page shows both sections.
+    assertFalse(ResultPageSections.resultShown(0));
+    assertTrue(ResultPageSections.sectionsVisible(false));
+  }
+
+  @Test
+  public void v8ResultPageHidesSections() {
+    // Any result content (one child or many): result page hides both.
+    assertTrue(ResultPageSections.resultShown(1));
+    assertTrue(ResultPageSections.resultShown(5));
+    assertFalse(ResultPageSections.sectionsVisible(true));
+  }
+
+  @Test
+  public void v8RuleDependsOnlyOnResultPresence() {
+    // The rule is a pure function of whether a result is shown: it
+    // takes no word, saved-set, or preference input, so it cannot
+    // change saved-word data whichever words are saved.
+    for (int count = 0; count <= 10; count++) {
+      assertEquals(count == 0,
+          ResultPageSections.sectionsVisible(
+              ResultPageSections.resultShown(count)));
+    }
+  }
+
+  // ---- v9: duplicate result header word removed, X kept ----
+
+  @Test
+  public void v9ResultHeaderHasNoWordHeading() {
+    // The large word heading above the tabs is gone: it duplicated
+    // the search header and the word card.
+    assertFalse(ResultHeader.hasWordHeading());
+  }
+
+  @Test
+  public void v10ResultHeaderHasNoCloseControl() {
+    // v10 supersedes v9 here: the small X close control is removed
+    // entirely; the result block starts directly with the tabs row,
+    // and system Back clears the result instead.
+    assertFalse(ResultHeader.hasCloseControl());
+    assertTrue(ResultHeader.backClearsResult());
+  }
+
+  @Test
+  public void v9CloseClearsResultAndRestoresHomeSections() {
+    // Tapping X empties the result box, and an empty result box
+    // means the home page: My Words and Try a word are visible again.
+    int afterClose = ResultHeader.childCountAfterClose();
+    assertEquals(0, afterClose);
+    assertFalse(ResultPageSections.resultShown(afterClose));
+    assertTrue(ResultPageSections.sectionsVisible(
+        ResultPageSections.resultShown(afterClose)));
+  }
+
+  @Test
+  public void v9HeaderRuleTouchesNoSavedData() {
+    // The header model takes no word or saved-set input at all, so
+    // removing the heading cannot change, clear, or delete saved words.
+    assertFalse(ResultHeader.hasWordHeading());
+    assertFalse(ResultHeader.hasCloseControl());
+    assertTrue(ResultHeader.backClearsResult());
+    assertEquals(0, ResultHeader.childCountAfterClose());
+  }
+
+  // ---- v10: result-page extras hidden, X removed, Back clears ----
+
+  @Test
+  public void v10ResultPageHidesExtras() {
+    // When a result is shown, the tip line, History/Settings pills,
+    // and Updating cards pill are hidden, alongside My Words and
+    // Try a word.
+    assertTrue(ResultPageSections.resultShown(1));
+    assertFalse(ResultPageSections.extrasVisible(true));
+    assertFalse(ResultPageSections.sectionsVisible(true));
+  }
+
+  @Test
+  public void v10HomePageShowsExtrasAgain() {
+    // When no result is shown (home page), the tip line,
+    // History/Settings pills, and Updating cards pill are present
+    // again, exactly as in v9, alongside My Words and Try a word.
+    assertFalse(ResultPageSections.resultShown(0));
+    assertTrue(ResultPageSections.extrasVisible(false));
+    assertTrue(ResultPageSections.sectionsVisible(false));
+  }
+
+  @Test
+  public void v10BackClearsResultAndRestoresHome() {
+    // Back on a result empties the result box, and an empty result
+    // box means the home page: My Words, Try a word, and the extras
+    // (tip line, History/Settings pills, Updating cards pill) are
+    // all visible again.
+    int afterBack = ResultHeader.childCountAfterClose();
+    assertEquals(0, afterBack);
+    assertFalse(ResultPageSections.resultShown(afterBack));
+    assertTrue(ResultPageSections.sectionsVisible(
+        ResultPageSections.resultShown(afterBack)));
+    assertTrue(ResultPageSections.extrasVisible(
+        ResultPageSections.resultShown(afterBack)));
+  }
+
+  @Test
+  public void v10ExtrasRuleDependsOnlyOnResultPresence() {
+    // The extras rule is a pure function of whether a result is
+    // shown: it takes no word, saved-set, or preference input, so
+    // hiding the extras on a result page cannot change saved-word
+    // data or downloaded pictures whichever words are saved.
+    for (int count = 0; count <= 10; count++) {
+      assertEquals(count == 0,
+          ResultPageSections.extrasVisible(
+              ResultPageSections.resultShown(count)));
+    }
+  }
+
+  @Test
+  public void v10ShowCardIsCenteredWithPictureOnTop() {
+    // The Show card popup sits in the middle of the screen (not a
+    // full-height or bottom sheet), with the picture panel on top
+    // when a picture exists and no panel at all when there is none
+    // (never a fake picture).
+    assertTrue(ShowCardLayout.popupCentered());
+    assertFalse(ShowCardLayout.popupIsFullHeightSheet());
+    assertTrue(ShowCardLayout.pictureOnTop());
+    assertTrue(ShowCardLayout.noPicturePanelWhenNoPicture());
+  }
+
+  @Test
+  public void v10TellMeMoreIsCompact() {
+    // Tell Me More is compact, about the size of its text, not the
+    // old wide full-width button.
+    assertTrue(ShowCardLayout.tellMeMoreCompact());
+    assertFalse(ShowCardLayout.tellMeMoreFullWidth());
+  }
+
+  @Test
+  public void v10CardRulesTouchNoSavedData() {
+    // The card layout model takes no word or saved-set input at
+    // all, so centering the popup, putting the picture on top, and
+    // shrinking Tell Me More cannot change saved words or delete
+    // downloaded pictures.
+    assertTrue(ShowCardLayout.popupCentered());
+    assertTrue(ShowCardLayout.pictureOnTop());
+    assertTrue(ShowCardLayout.tellMeMoreCompact());
+  }
 }

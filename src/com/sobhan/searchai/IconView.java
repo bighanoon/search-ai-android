@@ -23,6 +23,10 @@ public class IconView extends View {
   // v5: download (arrow into a tray) for the Word file button, clearly
   // distinct from the SHARE node diagram.
   public static final int DOWNLOAD = 10;
+  // v7: play triangle for the Show card picture button and the
+  // detail section play controls; three dots for the "..." menus.
+  public static final int PLAY = 11;
+  public static final int DOTS = 12;
 
   private int kind = SPEAKER;
   private int color = 0xFFFFFFFF;
@@ -87,6 +91,8 @@ public class IconView extends View {
       case SWAP: drawSwap(canvas); break;
       case CHECK: drawCheck(canvas); break;
       case DOWNLOAD: drawDownload(canvas); break;
+      case PLAY: drawPlay(canvas); break;
+      case DOTS: drawDots(canvas); break;
       default: break;
     }
   }
@@ -190,5 +196,20 @@ public class IconView extends View {
     c.drawLine(50, 16, 50, 62, paint);
     c.drawLine(34, 48, 50, 64, paint);
     c.drawLine(66, 48, 50, 64, paint);
+  }
+
+  private void drawPlay(Canvas c) {
+    Path p = new Path();
+    p.moveTo(36, 22);
+    p.lineTo(36, 78);
+    p.lineTo(80, 50);
+    p.close();
+    c.drawPath(p, filled ? fillPaint : paint);
+  }
+
+  private void drawDots(Canvas c) {
+    c.drawCircle(22, 50, 8, filled ? fillPaint : paint);
+    c.drawCircle(50, 50, 8, filled ? fillPaint : paint);
+    c.drawCircle(78, 50, 8, filled ? fillPaint : paint);
   }
 }

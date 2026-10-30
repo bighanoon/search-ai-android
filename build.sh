@@ -1,5 +1,5 @@
 #!/bin/bash
-# Search AI APK v5 build (repository copy).
+# Search AI APK v10 build (repository copy).
 # This script differs deliberately from the working build script: it uses
 # repository-relative paths and takes the keystore password from an
 # environment variable, so it runs without any local file the repo does
@@ -12,9 +12,12 @@
 # crashes on this app's anonymous classes.
 # Signing: point KS at your own debug keystore and KS_ALIAS at its alias,
 # then set APK_KS_PASS to the keystore password before running.
-# v5 on top of v4: select-to-translate popup (Save, Hear, Copy, More, Close),
-# full dictionary card (per-word FA for synonyms and antonyms), Settings-only
-# ChatGPT API option, word-file export via share sheet.
+# v10 on top of v9: result-page extras (tip line, History/Settings pills,
+# Updating cards pill) hidden while a result is shown and shown on the home
+# page; the small X close control removed entirely (system Back on a result
+# clears the result and restores home); Show card as a centered popup with
+# the picture on top and a compact Tell Me More button. All other content
+# and saved data untouched.
 set -euo pipefail
 export PATH="$HOME/jdk21/bin:$PATH"
 SDK="$HOME/android-sdk"
@@ -26,7 +29,7 @@ KS_ALIAS="vocabkey"
 : "${APK_KS_PASS:?Set APK_KS_PASS to the debug keystore password before running.}"
 
 echo "== aapt2 compile =="
-"$BT/aapt2" compile -o compiled.zip res/values/strings.xml
+"$BT/aapt2" compile -o compiled.zip res/values/strings.xml res/drawable/*.webp
 
 echo "== aapt2 link =="
 "$BT/aapt2" link -o app-unsigned.apk -I "$AJ" --manifest AndroidManifest.xml compiled.zip
@@ -46,9 +49,9 @@ cd dex && jar uf ../app-unsigned.apk classes.dex && cd ..
 "$BT/zipalign" -f 4 app-unsigned.apk app-aligned.apk
 "$BT/apksigner" sign --ks "$KS" --ks-key-alias "$KS_ALIAS" \
   --ks-pass "env:APK_KS_PASS" --key-pass "env:APK_KS_PASS" \
-  --out ./Search-AI-v5.apk app-aligned.apk
+  --out ./Search-AI-v10.apk app-aligned.apk
 
 echo "== verify =="
-"$BT/apksigner" verify ./Search-AI-v5.apk && echo "SIGNATURE OK"
-"$BT/aapt2" dump badging ./Search-AI-v5.apk | head -4
-ls -la ./Search-AI-v5.apk
+"$BT/apksigner" verify ./Search-AI-v10.apk && echo "SIGNATURE OK"
+"$BT/aapt2" dump badging ./Search-AI-v10.apk | head -4
+ls -la ./Search-AI-v10.apk
