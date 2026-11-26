@@ -1,0 +1,68 @@
+name: VividVocab emulator proof
+
+# One-off run: boot VividVocab 1.9.1 in a cloud Android emulator, open it,
+# screenshot the first screen, and commit the screenshot back to this branch.
+# Triggered by pushing this file to the vividvocab-emulator branch.
+
+on:
+  push:
+    branches: [vividvocab-emulator]
+
+jobs:
+  open-app:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download and reassemble VividVocab APK
+        run: |
+          curl -L --fail -o vividvocab.apk.part-00 "https://muse.ai/files/1423796604145611/1139070498825855/ld0ih73rwybwcbdkgaxkg959/vividvocab.apk.part-00"
+          curl -L --fail -o vividvocab.apk.part-01 "https://muse.ai/files/1423796604145611/997819079602948/l8hlahipiwq9z8gyezxmkbfo/vividvocab.apk.part-01"
+          cat vividvocab.apk.part-00 vividvocab.apk.part-01 > vividvocab.apk
+          ls -l vividvocab.apk
+          echo "e047139bead2f48f468285d84620b4dd  vividvocab.apk" | md5sum -c -
+
+      - name: Run app in emulator and screenshot
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          script: |
+            adb install -r vividvocab.apk
+            adb shell pm list packages | grep -i vividvocab || echo "PACKAGE NOT FOUND AFTER INSTALL"
+            adb shell monkey -p com.vividvocab.android -c android.intent.category.LAUNCHER 1
+            sleep 20
+            adb exec-out screencap -p > vividvocab-first-screen.png
+            ls -l vividvocab-first-screen.png
+            adb shell dumpsys window windows | grep -i -A3 -B3 vividvocab > vividvocab-window.txt || true
+            adb shell pidof com.vividvocab.android > vividvocab-pid.txt || echo "APP NOT RUNNING" > vividvocab-pid.txt
+            cat vividvocab-pid.txt
+
+      - name: Commit screenshot back to branch
+        if: always()
+        run: |
+          git config user.name "muse-emulator-run"
+          git config user.email "muse-emulator-run@users.noreply.github.com"
+          mkdir -p vividvocab-emulator
+          cp vividvocab-first-screen.png vividvocab-emulator/ 2>/dev/null || true
+          cp vividvocab-window.txt vividvocab-emulator/ 2>/dev/null || true
+          cp vividvocab-pid.txt vividvocab-emulator/ 2>/dev/null || true
+          git add vividvocab-emulator/
+          git commit -m "VividVocab emulator screenshot [skip ci]" || echo "nothing to commit"
+          git push origin vividvocab-emulator || echo "push failed"
+
+      - name: Upload screenshot as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vividvocab-screenshot
+          path: |
+            vividvocab-first-screen.png
+            vividvocab-window.txt
+            vividvocab-pid.txt
+          if-no-files-found: warn
