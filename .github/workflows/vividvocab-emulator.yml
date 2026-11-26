@@ -3,6 +3,12 @@ name: VividVocab emulator proof
 # One-off run: boot VividVocab 1.9.1 in a cloud Android emulator, open it,
 # screenshot the first screen, and commit the screenshot back to this branch.
 # Triggered by pushing this file to the vividvocab-emulator branch.
+#
+# Run #5: the APK is now the COMPLETE 1.9.1 XAPK from APKPure's own version
+# API (base + config.arm64_v8a.apk with libreactnative.so — the library whose
+# absence crashed run #4). Fetched at runtime; nothing is uploaded.
+# Emulator moved to API 34 google_apis: that image ships Google's
+# libndk_translation.so (ARM translation) for the arm64 splits.
 
 on:
   push:
@@ -25,13 +31,55 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Download and reassemble VividVocab APK
+      # Complete 1.9.1 XAPK (base + arm64 split with libreactnative.so) fetched
+      # straight from APKPure's version API at runtime — no uploads needed.
+      # NOTE: the size marker lives base64-encoded inside each download URL's
+      # `c` param (it decodes to dev=...&t=xapk&s=<bytes>&vn=<ver>&vc=<code>),
+      # so a plain-text grep for 163864965 finds NOTHING. Parse it with
+      # python: strings -> decode the `c` param -> pick vn=1.9.1, s=163864965.
+      # (Verified 2026-11-26: this exact logic returns a URL that downloads
+      # 163,864,965 bytes, md5 c5f9be863b707be2971bf0e46674c4c7.)
+      - name: Download complete VividVocab 1.9.1 XAPK from APKPure
         run: |
-          curl -L --fail -o vividvocab.apk.part-00 "https://muse.ai/files/1423796604145611/1139070498825855/ld0ih73rwybwcbdkgaxkg959/vividvocab.apk.part-00"
-          curl -L --fail -o vividvocab.apk.part-01 "https://muse.ai/files/1423796604145611/997819079602948/l8hlahipiwq9z8gyezxmkbfo/vividvocab.apk.part-01"
-          cat vividvocab.apk.part-00 vividvocab.apk.part-01 > vividvocab.apk
-          ls -l vividvocab.apk
-          echo "e047139bead2f48f468285d84620b4dd  vividvocab.apk" | md5sum -c -
+          curl -s --fail "https://api.pureapk.com/m/v3/cms/app_version?hl=en-US&package_name=com.vividvocab.android" -H 'x-sv: 29' -H 'x-abis: arm64-v8a,armeabi-v7a,armeabi' -H 'x-gp: 1' -o apkpure_version.bin
+          ls -l apkpure_version.bin
+          strings apkpure_version.bin > apkpure_strings.txt
+          cat > /tmp/pick_xapk_url.py <<'PYEOF'
+          import re, base64, urllib.parse, sys
+          lines = open('apkpure_strings.txt').read().splitlines()
+          def b64d(s):
+              s = s.strip()
+              s += '=' * (-len(s) % 4)
+              return base64.b64decode(s).decode()
+          for line in lines:
+              m = re.search(r'(https://download\.pureapk\.com/b/XAPK/\S+)', line)
+              if not m:
+                  continue
+              u = m.group(1)
+              q = urllib.parse.urlparse(u).query
+              c = urllib.parse.parse_qs(q).get('c', [''])[0]
+              try:
+                  dec = b64d(c.split('|')[2])
+              except Exception:
+                  continue
+              d = dict(p.split('=', 1) for p in dec.split('&') if '=' in p)
+              if d.get('vn') == '1.9.1' and d.get('s') == '163864965':
+                  print(u)
+                  sys.exit(0)
+          print('ERROR: no 1.9.1 / 163864965-byte XAPK URL in APKPure response', file=sys.stderr)
+          sys.exit(1)
+          PYEOF
+          XAPK_URL=$(python3 /tmp/pick_xapk_url.py) || { echo "ERROR: could not pick the 1.9.1 XAPK URL from the APKPure API response" >&2; exit 1; }
+          echo "XAPK URL found, downloading…"
+          curl -sL --fail -o vividvocab.xapk "$XAPK_URL"
+          ls -l vividvocab.xapk
+          SIZE=$(stat -c%s vividvocab.xapk)
+          echo "downloaded size: $SIZE (expected 163864965)"
+          if [ "$SIZE" -lt 163000000 ] || [ "$SIZE" -gt 165000000 ]; then echo "ERROR: unexpected XAPK size $SIZE" >&2; exit 1; fi
+          unzip -o vividvocab.xapk
+          ls -l com.vividvocab.android.apk config.arm64_v8a.apk config.en.apk config.xxhdpi.apk
+          unzip -l config.arm64_v8a.apk | grep -q "lib/arm64-v8a/libreactnative.so" || { echo "ERROR: config.arm64_v8a.apk lacks libreactnative.so" >&2; exit 1; }
+          echo "XAPK verified: base + arm64 split with libreactnative.so present"
 
       # The emulator only lives for the duration of the emulator-runner step, so
       # logcat/screenshots must be taken inside that same session. They are in
@@ -44,7 +92,7 @@ jobs:
           #!/usr/bin/env bash
           # No `set -e`: nothing here may abort the step.
           PKG=com.vividvocab.android
-          timeout 120 adb install -r vividvocab.apk || echo "INSTALL FAILED or timed out"
+          timeout 180 adb install-multiple -r com.vividvocab.android.apk config.arm64_v8a.apk config.en.apk config.xxhdpi.apk || echo "INSTALL FAILED or timed out"
           timeout 30 adb shell pm list packages | grep -i vividvocab || echo "PACKAGE NOT FOUND AFTER INSTALL"
           timeout 30 adb logcat -c || true
           # `am start -W` waits for the first frame and can hang forever; cap it.
@@ -85,7 +133,7 @@ jobs:
         timeout-minutes: 40
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 30
+          api-level: 34
           target: google_apis
           arch: x86_64
           profile: pixel_5
