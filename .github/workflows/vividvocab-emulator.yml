@@ -7,13 +7,23 @@ name: VividVocab emulator proof
 on:
   push:
     branches: [vividvocab-emulator]
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   open-app:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+
+      - name: Enable KVM (hardware acceleration)
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
 
       - name: Download and reassemble VividVocab APK
         run: |
@@ -26,12 +36,17 @@ jobs:
       - name: Run app in emulator and screenshot
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
-          target: google_apis
+          api-level: 30
+          target: default
           arch: x86_64
-          profile: pixel_6
+          profile: pixel_5
+          ram-size: 4096M
+          heap-size: 512M
+          disk-size: 4096M
+          force-avd-creation: true
+          emulator-boot-timeout: 900
           disable-animations: true
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none -no-metrics
           script: |
             adb install -r vividvocab.apk
             adb shell pm list packages | grep -i vividvocab || echo "PACKAGE NOT FOUND AFTER INSTALL"
