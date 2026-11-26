@@ -50,13 +50,23 @@ jobs:
           script: |
             adb install -r vividvocab.apk
             adb shell pm list packages | grep -i vividvocab || echo "PACKAGE NOT FOUND AFTER INSTALL"
-            adb shell monkey -p com.vividvocab.android -c android.intent.category.LAUNCHER 1
-            sleep 20
+            adb logcat -c
+            adb shell am start -W -n com.vividvocab.android/com.vividvocab.android.MainActivity > vividvocab-launch.txt 2>&1 || echo "am start FAILED, falling back to monkey" >> vividvocab-launch.txt
+            cat vividvocab-launch.txt
+            grep -qiE "Error|Exception|does not exist|FAILED" vividvocab-launch.txt && adb shell monkey -p com.vividvocab.android -c android.intent.category.LAUNCHER 1 || true
             adb exec-out screencap -p > vividvocab-first-screen.png
-            ls -l vividvocab-first-screen.png
+            adb shell pidof com.vividvocab.android > vividvocab-pid-immediate.txt || echo "APP NOT RUNNING right after launch" > vividvocab-pid-immediate.txt
+            echo "pid right after launch:" && cat vividvocab-pid-immediate.txt
+            sleep 20
+            adb exec-out screencap -p > vividvocab-after-20s.png
+            ls -l vividvocab-first-screen.png vividvocab-after-20s.png
             adb shell dumpsys window windows | grep -i -A3 -B3 vividvocab > vividvocab-window.txt || true
             adb shell pidof com.vividvocab.android > vividvocab-pid.txt || echo "APP NOT RUNNING" > vividvocab-pid.txt
-            cat vividvocab-pid.txt
+            echo "pid after 20s:" && cat vividvocab-pid.txt
+            adb logcat -d > vividvocab-logcat.txt
+            wc -l vividvocab-logcat.txt
+            echo "===== crash-relevant logcat lines =====" && grep -E "FATAL|AndroidRuntime|com\.vividvocab\.android|Process .* has died|ActivityManager.*(Start proc|Displayed|Force finishing|crash)|DEBUG|signal [0-9]+" vividvocab-logcat.txt | tail -n 200 || echo "(no matching lines)"
+            echo "===== end crash-relevant lines ====="
 
       - name: Commit screenshot back to branch
         if: always()
@@ -67,6 +77,10 @@ jobs:
           cp vividvocab-first-screen.png vividvocab-emulator/ 2>/dev/null || true
           cp vividvocab-window.txt vividvocab-emulator/ 2>/dev/null || true
           cp vividvocab-pid.txt vividvocab-emulator/ 2>/dev/null || true
+          cp vividvocab-pid-immediate.txt vividvocab-emulator/ 2>/dev/null || true
+          cp vividvocab-after-20s.png vividvocab-emulator/ 2>/dev/null || true
+          cp vividvocab-logcat.txt vividvocab-emulator/ 2>/dev/null || true
+          cp vividvocab-launch.txt vividvocab-emulator/ 2>/dev/null || true
           git add vividvocab-emulator/
           git commit -m "VividVocab emulator screenshot [skip ci]" || echo "nothing to commit"
           git push origin vividvocab-emulator || echo "push failed"
@@ -80,4 +94,8 @@ jobs:
             vividvocab-first-screen.png
             vividvocab-window.txt
             vividvocab-pid.txt
+            vividvocab-pid-immediate.txt
+            vividvocab-after-20s.png
+            vividvocab-logcat.txt
+            vividvocab-launch.txt
           if-no-files-found: warn
