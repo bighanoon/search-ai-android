@@ -33,11 +33,60 @@ jobs:
           ls -l vividvocab.apk
           echo "e047139bead2f48f468285d84620b4dd  vividvocab.apk" | md5sum -c -
 
-      - name: Run app in emulator and screenshot
+      # The emulator only lives for the duration of the emulator-runner step, so
+      # logcat/screenshots must be taken inside that same session. They are in
+      # their own script (diagnostics.sh) that always runs after launch.sh,
+      # whatever launch.sh did. Every adb call is wrapped in `timeout`.
+      - name: Write launch and diagnostics scripts
+        run: |
+          mkdir -p ci-scripts
+          cat > ci-scripts/launch.sh <<'LAUNCH_EOF'
+          #!/usr/bin/env bash
+          # No `set -e`: nothing here may abort the step.
+          PKG=com.vividvocab.android
+          timeout 120 adb install -r vividvocab.apk || echo "INSTALL FAILED or timed out"
+          timeout 30 adb shell pm list packages | grep -i vividvocab || echo "PACKAGE NOT FOUND AFTER INSTALL"
+          timeout 30 adb logcat -c || true
+          # `am start -W` waits for the first frame and can hang forever; cap it.
+          timeout 90 adb shell am start -W -n $PKG/$PKG.MainActivity > vividvocab-launch.txt 2>&1
+          rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "am start exited rc=$rc (124 = timed out after 90s), falling back to monkey" >> vividvocab-launch.txt
+            timeout 60 adb shell monkey -p $PKG -c android.intent.category.LAUNCHER 1 >> vividvocab-launch.txt 2>&1 || true
+          elif grep -qiE "Error|Exception|does not exist|FAILED" vividvocab-launch.txt; then
+            echo "am start reported an error, falling back to monkey" >> vividvocab-launch.txt
+            timeout 60 adb shell monkey -p $PKG -c android.intent.category.LAUNCHER 1 >> vividvocab-launch.txt 2>&1 || true
+          fi
+          cat vividvocab-launch.txt
+          exit 0
+          LAUNCH_EOF
+          cat > ci-scripts/diagnostics.sh <<'DIAG_EOF'
+          #!/usr/bin/env bash
+          PKG=com.vividvocab.android
+          timeout 30 adb exec-out screencap -p > vividvocab-first-screen.png || echo "first screenshot failed"
+          timeout 30 adb shell pidof $PKG > vividvocab-pid-immediate.txt || echo "APP NOT RUNNING right after launch" > vividvocab-pid-immediate.txt
+          echo "pid right after launch:" && cat vividvocab-pid-immediate.txt
+          sleep 20
+          timeout 30 adb exec-out screencap -p > vividvocab-after-20s.png || echo "20s screenshot failed"
+          ls -l vividvocab-first-screen.png vividvocab-after-20s.png
+          timeout 30 adb shell dumpsys window windows | grep -i -A3 -B3 vividvocab > vividvocab-window.txt || true
+          timeout 30 adb shell pidof $PKG > vividvocab-pid.txt || echo "APP NOT RUNNING" > vividvocab-pid.txt
+          echo "pid after 20s:" && cat vividvocab-pid.txt
+          timeout 60 adb logcat -d > vividvocab-logcat.txt || true
+          wc -l vividvocab-logcat.txt
+          echo "===== crash-relevant logcat lines ====="
+          grep -E "FATAL|AndroidRuntime|com\.vividvocab\.android|Process .* has died|ActivityManager.*(Start proc|Displayed|Force finishing|crash)|DEBUG|signal [0-9]+" vividvocab-logcat.txt | tail -n 200 || echo "(no matching lines)"
+          echo "===== end crash-relevant lines ====="
+          exit 0
+          DIAG_EOF
+          chmod +x ci-scripts/*.sh
+
+      - name: Run app in emulator and capture diagnostics
+        timeout-minutes: 40
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
-          target: default
+          target: google_apis
           arch: x86_64
           profile: pixel_5
           ram-size: 4096M
@@ -48,25 +97,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none -no-metrics
           script: |
-            adb install -r vividvocab.apk
-            adb shell pm list packages | grep -i vividvocab || echo "PACKAGE NOT FOUND AFTER INSTALL"
-            adb logcat -c
-            adb shell am start -W -n com.vividvocab.android/com.vividvocab.android.MainActivity > vividvocab-launch.txt 2>&1 || echo "am start FAILED, falling back to monkey" >> vividvocab-launch.txt
-            cat vividvocab-launch.txt
-            grep -qiE "Error|Exception|does not exist|FAILED" vividvocab-launch.txt && adb shell monkey -p com.vividvocab.android -c android.intent.category.LAUNCHER 1 || true
-            adb exec-out screencap -p > vividvocab-first-screen.png
-            adb shell pidof com.vividvocab.android > vividvocab-pid-immediate.txt || echo "APP NOT RUNNING right after launch" > vividvocab-pid-immediate.txt
-            echo "pid right after launch:" && cat vividvocab-pid-immediate.txt
-            sleep 20
-            adb exec-out screencap -p > vividvocab-after-20s.png
-            ls -l vividvocab-first-screen.png vividvocab-after-20s.png
-            adb shell dumpsys window windows | grep -i -A3 -B3 vividvocab > vividvocab-window.txt || true
-            adb shell pidof com.vividvocab.android > vividvocab-pid.txt || echo "APP NOT RUNNING" > vividvocab-pid.txt
-            echo "pid after 20s:" && cat vividvocab-pid.txt
-            adb logcat -d > vividvocab-logcat.txt
-            wc -l vividvocab-logcat.txt
-            echo "===== crash-relevant logcat lines =====" && grep -E "FATAL|AndroidRuntime|com\.vividvocab\.android|Process .* has died|ActivityManager.*(Start proc|Displayed|Force finishing|crash)|DEBUG|signal [0-9]+" vividvocab-logcat.txt | tail -n 200 || echo "(no matching lines)"
-            echo "===== end crash-relevant lines ====="
+            bash ci-scripts/launch.sh; bash ci-scripts/diagnostics.sh
 
       - name: Commit screenshot back to branch
         if: always()
