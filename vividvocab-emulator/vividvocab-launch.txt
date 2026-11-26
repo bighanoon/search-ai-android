@@ -1,0 +1,17 @@
+Starting: Intent { cmp=com.vividvocab.android/.MainActivity }
+am start exited rc=124 (124 = timed out after 90s), falling back to monkey
+  bash arg: -p
+  bash arg: com.vividvocab.android
+  bash arg: -c
+  bash arg: android.intent.category.LAUNCHER
+  bash arg: 1
+args: [-p, com.vividvocab.android, -c, android.intent.category.LAUNCHER, 1]
+ arg: "-p"
+ arg: "com.vividvocab.android"
+ arg: "-c"
+ arg: "android.intent.category.LAUNCHER"
+ arg: "1"
+data="com.vividvocab.android"
+data="android.intent.category.LAUNCHER"
+Events injected: 1
+## Network stats: elapsed time=28ms (0ms mobile, 0ms wifi, 28ms not connected)
